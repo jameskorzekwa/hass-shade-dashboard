@@ -79,18 +79,8 @@ const DEFAULT_LAYOUT = {
 DEFAULT_LAYOUT.groups.main_floor = [...DEFAULT_LAYOUT.groups.south, ...DEFAULT_LAYOUT.groups.west, ...DEFAULT_LAYOUT.groups.north, ...DEFAULT_LAYOUT.groups.hallway];
 DEFAULT_LAYOUT.groups.upstairs = [...DEFAULT_LAYOUT.groups.main_bedroom, ...DEFAULT_LAYOUT.groups.upstairs_hallway, ...DEFAULT_LAYOUT.groups.office];
 DEFAULT_LAYOUT.groups.all = [...DEFAULT_LAYOUT.groups.main_floor, ...DEFAULT_LAYOUT.groups.upstairs];
-const SP = "scene.living_room_gateway_";
-DEFAULT_LAYOUT.group_scenes = {
-  south: { open: [SP + "south_open"], close: [SP + "south_close"], direct: [] },
-  west: { open: [SP + "west_upper_open", SP + "west_lower_open"], close: [SP + "west_upper_close", SP + "west_lower_close"], direct: [] },
-  north: { open: [SP + "north_open"], close: [SP + "north_close"], direct: [] },
-  hallway: { open: [SP + "downstairs_hall_open"], close: [SP + "downstairs_hall_close"], direct: [] },
-  upstairs_hallway: { open: [SP + "hallway_open"], close: [SP + "hallway_close"], direct: [] },
-  office: { open: [SP + "office_open"], close: [SP + "office_close"], direct: [] },
-  main_floor: { open: [SP + "open_living_room", SP + "downstairs_hall_open"], close: [SP + "close_living_room", SP + "downstairs_hall_close"], direct: [] },
-  upstairs: { open: [SP + "open_all_upstairs_shades"], close: [SP + "hallway_close", SP + "office_close"], direct: ["cover.main_bedroom_shades"] },
-  all: { open: [SP + "open_all_shades"], close: [SP + "close_all_shades"], direct: ["cover.main_bedroom_shades"] },
-};
+// Bulk group moves go through shade_dashboard.move_group (one synced gateway call
+// per group, no PowerView scenes).
 // Entities on the G3 gateway (live-tracked). Everything except the main bedroom.
 DEFAULT_LAYOUT.tracked = Object.entries(DEFAULT_LAYOUT.shades).filter(([s]) => s !== "mbr1").map(([, v]) => v.entity);
 // Slots that support recalibration (PowerView shades; the RYSE main-bedroom shade does not).
@@ -336,10 +326,10 @@ class ShadeDashboardCard extends HTMLElement {
     this._wire();
   }
 
-  // Settings view: what each bulk button triggers (the PowerView scenes / direct
-  // cover services behind every group open/close). Read-only for now.
+  // Settings view: which shades each bulk button moves. Groups move in sync via
+  // one direct gateway call (shade_dashboard.move_group) — no PowerView scenes.
+  // Read-only for now.
   _settingsHtml() {
-    const gs = this._layout.group_scenes || {};
     const groups = this._layout.groups || {};
     const LABELS = {
       all: "Whole House — Open All / Close All",
@@ -354,33 +344,23 @@ class ShadeDashboardCard extends HTMLElement {
       office: "Kyle's Office",
     };
     const ORDER = ["all", "main_floor", "south", "west", "north", "hallway", "upstairs", "main_bedroom", "upstairs_hallway", "office"];
-    const renderId = (raw) => {
-      const direct = raw.endsWith(" (direct)");
-      const id = direct ? raw.slice(0, -9) : raw;
+    const nameOf = (id) => {
       const st = this._hass && this._hass.states[id];
       const fn = st && st.attributes && st.attributes.friendly_name;
-      const nm = fn || id.replace(/^scene\.living_room_gateway_/, "").replace(/_/g, " ");
-      return `<div style="display:flex;flex-direction:column;margin-bottom:2px"><span style="font-size:12px;color:#26211B">${nm}${direct ? ' <span style="color:#A79F90;font-size:10px">· direct cover</span>' : ""}</span><span style="font:500 10px ui-monospace,Menlo,monospace;color:#A79F90">${id}</span></div>`;
+      return fn || id.replace(/^cover\.shade_/, "");
     };
-    const line = (label, ids, fallback) => {
-      const body = ids.length ? ids.map(renderId).join("") : `<span style="font-size:11px;color:#A79F90;font-style:italic">${fallback}</span>`;
-      return `<div style="display:flex;gap:12px"><span style="flex-shrink:0;width:48px;color:#8A8177;font-size:12px;font-weight:600;padding-top:1px">${label}</span><div style="display:flex;flex-direction:column">${body}</div></div>`;
-    };
-    return ORDER.filter((g) => groups[g])
-      .map((g) => {
-        const spec = gs[g] || {};
-        const count = (groups[g] || []).length;
-        const direct = (spec.direct || []).map((e) => `${e} (direct)`);
-        const openIds = (spec.open || []).concat(direct);
-        const closeIds = (spec.close || []).concat(direct);
-        const noScene = !(spec.open || []).length && !(spec.close || []).length;
-        return `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
-          <div style="font-weight:700;font-size:13.5px;color:#26211B">${LABELS[g] || g} <span style="font-weight:500;color:#8A8177;font-size:11px">· ${count} shade${count === 1 ? "" : "s"}</span></div>
-          ${line("Open", openIds, noScene ? "cover open — no scene" : "—")}
-          ${line("Close", closeIds, noScene ? "cover close — no scene" : "—")}
-        </div>`;
-      })
-      .join("");
+    const chip = (id) =>
+      `<span style="display:inline-block;font-size:11px;color:#4A4237;background:#F0EADE;border:1px solid #E2DACB;border-radius:7px;padding:2px 8px;margin:2px 4px 0 0">${nameOf(id)}</span>`;
+    return `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
+      ORDER.filter((g) => groups[g])
+        .map((g) => {
+          const members = groups[g] || [];
+          return `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;flex-direction:column;gap:6px">
+            <div style="font-weight:700;font-size:13.5px;color:#26211B">${LABELS[g] || g} <span style="font-weight:500;color:#8A8177;font-size:11px">· ${members.length} shade${members.length === 1 ? "" : "s"} in sync</span></div>
+            <div style="display:flex;flex-wrap:wrap">${members.map(chip).join("")}</div>
+          </div>`;
+        })
+        .join("");
   }
 
   _template() {
@@ -523,7 +503,7 @@ class ShadeDashboardCard extends HTMLElement {
     </div>
 
     <div data-panel="settings" style="flex-direction:column;gap:8px;flex:1;min-height:0">
-      <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Settings</span><span style="font-size:12px;color:#8A8177">Which PowerView scenes each button triggers</span></div>
+      <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Settings</span><span style="font-size:12px;color:#8A8177">Which shades each button moves</span></div>
       <div style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:2px 2px 8px">
         ${this._settingsHtml()}
       </div>
@@ -620,30 +600,19 @@ class ShadeDashboardCard extends HTMLElement {
     this._update();
   }
   _group(group, dir) {
-    // Refuse bulk moves while any shade is calibrating — a gateway scene can't
-    // exclude the calibrating shade.
+    // Refuse bulk moves while any shade is calibrating (skip only that one? a
+    // group move should wait until it finishes).
     if (this._anyCalibrating()) return;
     const entities = (this._layout.groups[group] || []).filter((e) => {
       const st = this._hass && this._hass.states[e];
       return st && st.state !== "unavailable";
     });
     if (!entities.length) return;
-    const target = dir === "up" ? 100 : 0;
-    // Flash every shade in the group at once (tracked ones follow the live
-    // gateway position; untracked get an optimistic target).
-    entities.forEach((e) => this._mark(e, target));
-    const gs = (this._layout.group_scenes || {})[group];
-    if (gs && (gs.open || gs.close)) {
-      // Prefer in-sync PowerView scenes (a scene moves all its members together).
-      const scenes = (dir === "up" ? gs.open : gs.close) || [];
-      if (scenes.length) this._hass.callService("scene", "turn_on", { entity_id: scenes });
-      // Shades not covered by a gateway scene (e.g. the main bedroom).
-      const direct = (gs.direct || []).filter((e) => entities.includes(e));
-      if (direct.length) this._callCover(dir === "up" ? "open_cover" : "close_cover", direct);
-    } else {
-      // No scene for this group -> plain cover services.
-      this._callCover(dir === "up" ? "open_cover" : "close_cover", entities);
-    }
+    const position = dir === "up" ? 100 : 0;
+    // Flash every member at once, then move them all in one synchronized call
+    // (no PowerView scene — see shade_dashboard.move_group).
+    entities.forEach((e) => this._mark(e));
+    this._hass.callService("shade_dashboard", "move_group", { entity_id: entities, position });
     this._update();
   }
   _scene(key) {

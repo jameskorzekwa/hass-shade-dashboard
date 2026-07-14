@@ -82,6 +82,7 @@ class GatewayTracker:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._id_to_entity: dict[int, str] = {}
+        self._entity_to_id: dict[str, int] = {}
         self._entity_to_ble: dict[str, str] = {}
         self._last: dict | None = None
         self._prev_pos: dict[str, int] = {}
@@ -113,8 +114,35 @@ class GatewayTracker:
                 if shade.get("bleName"):
                     ble[entity] = shade["bleName"]
         self._id_to_entity = mapping
+        self._entity_to_id = {entity: gid for gid, entity in mapping.items()}
         self._entity_to_ble = ble
         _LOGGER.debug("Gateway tracker mapped %d shades (%d with bleName)", len(mapping), len(ble))
+
+    def has_gateway_id(self, entity_id: str) -> bool:
+        """Whether a (source) cover entity is on this gateway."""
+        return entity_id in self._entity_to_id
+
+    async def async_move_group(self, source_entities: list[str], primary: float) -> bool:
+        """Move several gateway shades to one position in a single synced call.
+
+        `PUT /home/shades/positions?ids=<all ids>` drives every listed shade
+        together (verified in-sync), so bulk open/close needs no PowerView scene.
+        Shades locked mid-calibration are skipped.
+        """
+        ids = [self._entity_to_id[e] for e in source_entities if e in self._entity_to_id and not self.is_calibrating(e)]
+        if not ids:
+            return False
+        primary = max(0.0, min(1.0, primary))
+        id_list = ",".join(str(i) for i in ids)
+        url = f"http://{self._host}/home/shades/positions?ids={id_list}"
+        try:
+            async with self._session.put(url, json={"positions": {"primary": primary}}, timeout=10) as resp:
+                resp.raise_for_status()
+        except Exception as err:  # noqa: BLE001 - report, don't raise into the service
+            _LOGGER.warning("Group move (ids=%s) failed: %s", id_list, err)
+            return False
+        _LOGGER.debug("Group move ids=%s -> primary %.2f", id_list, primary)
+        return True
 
     def is_calibrating(self, entity_id: str) -> bool:
         """Whether a shade is currently locked mid-calibration."""

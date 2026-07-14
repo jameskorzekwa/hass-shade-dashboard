@@ -14,18 +14,54 @@ from __future__ import annotations
 import logging
 import os
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, TRACKER_KEY, build_panel_config
+from .const import DOMAIN, TRACKER_KEY, build_panel_config, source_for_abstract
 from .gateway import GatewayTracker
 
 _LOGGER = logging.getLogger(__name__)
 
 # Config-entry-only integration (set up from the UI, no YAML config).
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+SERVICE_MOVE_GROUP = "move_group"
+MOVE_GROUP_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): vol.All(cv.ensure_list, [cv.entity_id]),
+        vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+    }
+)
+
+
+async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Move a group of shades to one position in sync (no PowerView scenes).
+
+    Gateway-tracked members go out in a single synchronized positions call;
+    untracked members (the RYSE main bedroom) go via their own cover, which
+    handles routing + the calibration lock.
+    """
+    entities = call.data["entity_id"]
+    position = call.data["position"]
+    tracker = hass.data.get(TRACKER_KEY)
+    tracked_sources: list[str] = []
+    untracked: list[str] = []
+    for entity in entities:
+        source = source_for_abstract(entity)
+        if source and tracker is not None and tracker.has_gateway_id(source):
+            tracked_sources.append(source)
+        else:
+            untracked.append(entity)
+    if tracked_sources and tracker is not None:
+        await tracker.async_move_group(tracked_sources, position / 100)
+    for entity in untracked:
+        await hass.services.async_call(
+            "cover", "set_cover_position", {"entity_id": entity, "position": position}, blocking=False
+        )
+
 
 # Unified per-shade covers that front the real devices (see cover.py). Their
 # live current_position is fed by the gateway tracker's events.
@@ -78,6 +114,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         tracker = GatewayTracker(hass)
         hass.data[TRACKER_KEY] = tracker
         await tracker.start()
+
+    if not hass.services.has_service(DOMAIN, SERVICE_MOVE_GROUP):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_MOVE_GROUP,
+            lambda call: _async_move_group(hass, call),
+            schema=MOVE_GROUP_SCHEMA,
+        )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

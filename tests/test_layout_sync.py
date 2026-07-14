@@ -83,19 +83,14 @@ def test_gateway_room_slot_resolves() -> None:
     assert "cover.main_bedroom_shades" not in {SHADES[f"{p}1"] for p in GATEWAY_ROOM_SLOT.values() if p != "lrh1"}
 
 
-def test_group_scenes() -> None:
+def test_no_scenes_in_config() -> None:
+    # Bulk moves go through shade_dashboard.move_group (direct in-sync gateway
+    # calls) — the config no longer carries any PowerView scene mapping.
     cfg = build_panel_config()
-    gs = cfg["group_scenes"]
-    # west composes the clean upper+lower sub-scenes (avoids the polluted "West")
-    assert gs["west"]["open"] == [
-        "scene.living_room_gateway_west_upper_open",
-        "scene.living_room_gateway_west_lower_open",
-    ]
-    # upstairs close avoids the uh2-missing scene; bedroom handled directly via
-    # its abstraction cover
-    assert gs["upstairs"]["direct"] == ["cover.shade_mbr1"]
-    assert gs["all"]["open"] == ["scene.living_room_gateway_open_all_shades"]
-    assert "west_upper_open" in CARD_JS.read_text()
+    assert "group_scenes" not in cfg
+    text = CARD_JS.read_text()
+    assert "scene.living_room_gateway_" not in text
+    assert "move_group" in text  # the card calls the sync-move service
 
 
 def test_recal_slots_exclude_main_bedroom() -> None:

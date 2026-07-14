@@ -8,3 +8,31 @@ recalibrate:
     entity:
       integration: shade_dashboard
       domain: cover
+
+move_group:
+  name: Move a group of shades in sync
+  description: >-
+    Move several shades to one position in a single synchronized gateway call
+    (no PowerView scene). PowerView members move together via one positions
+    request; the RYSE main-bedroom shade moves via its own cover.
+  fields:
+    entity_id:
+      name: Shades
+      description: The shade covers to move (cover.shade_*).
+      required: true
+      example: "[cover.shade_u4, cover.shade_l3]"
+      selector:
+        entity:
+          integration: shade_dashboard
+          domain: cover
+          multiple: true
+    position:
+      name: Position
+      description: Target position, 0 = closed, 100 = open.
+      required: true
+      example: 100
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
