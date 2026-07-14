@@ -23,6 +23,7 @@ const FABRIC = "linear-gradient(180deg,#DED7CB,#D1C9BB)";
 const HATCH = "repeating-linear-gradient(45deg,#EFEBE3 0 7px,#E2DBCE 7px 14px)";
 const RING = "0 0 0 2px #F5F1EA, 0 0 0 5px #C67B3B";
 const ACCENT = "#C67B3B";
+const HEM = "#AA9C81"; // shade fabric bottom bar (kept distinct so it reads on every window)
 const SCENE_ACTIVE_BG = "color-mix(in oklab, #C67B3B 18%, #FFFDF9)";
 
 // Mirror of const.py (build_panel_config). Kept in sync by test_layout_sync.py.
@@ -61,7 +62,6 @@ const DEFAULT_LAYOUT = {
     main_bedroom: ["cover.main_bedroom_shades"],
   },
   scenes: {
-    movie: { title: "Movie Mode", desc: "Close everything", kind: "script", script: "script.movie_mode" },
     open_all: { title: "Open All", desc: "Every shade up", kind: "group", group: "all", dir: "up" },
     close_all: { title: "Close All", desc: "Every shade down", kind: "group", group: "all", dir: "down" },
   },
@@ -71,10 +71,9 @@ const DEFAULT_LAYOUT = {
     west_lux: "sensor.west_light_level",
     south_lux: "sensor.south_light_level",
   },
-  automation: {
-    entity: "input_boolean.shade_automation",
-    enable_script: "script.enable_shade_automation",
-    disable_script: "script.disable_shade_automation",
+  toggles: {
+    movie: { title: "Movie Mode", desc_on: "On · everything closed", desc_off: "Off", entity: "input_boolean.movie_mode" },
+    automation: { title: "Auto shades", desc_on: "On · sun & sunset control", desc_off: "Off · manual only", entity: "input_boolean.shade_automation", enable_script: "script.enable_shade_automation", disable_script: "script.disable_shade_automation" },
   },
 };
 DEFAULT_LAYOUT.groups.main_floor = [...DEFAULT_LAYOUT.groups.south, ...DEFAULT_LAYOUT.groups.west, ...DEFAULT_LAYOUT.groups.north, ...DEFAULT_LAYOUT.groups.hallway];
@@ -95,9 +94,9 @@ DEFAULT_LAYOUT.group_scenes = {
 
 // Presentation metadata (label number + control-bar subtitle). Card-side only.
 const SLOT_META = {
-  u1: { sub: "Living room · south wall" }, u2: { sub: "Living room · south wall" }, u3: { sub: "Living room · south wall" },
+  u1: { num: "U1", sub: "Living room · south wall" }, u2: { num: "U2", sub: "Living room · south wall" }, u3: { num: "U3", sub: "Living room · south wall" },
   l1: { num: "1", sub: "Living room · south wall" }, l2: { num: "2", sub: "Living room · south wall" },
-  u4: { sub: "Living room · west wall" }, u5: { sub: "Living room · west wall" }, u6: { sub: "Living room · west wall" }, u7: { sub: "Living room · west wall" },
+  u4: { num: "U4", sub: "Living room · west wall" }, u5: { num: "U5", sub: "Living room · west wall" }, u6: { num: "U6", sub: "Living room · west wall" }, u7: { num: "U7", sub: "Living room · west wall" },
   l3: { num: "3", sub: "Living room · west wall" }, l4: { num: "4", sub: "Living room · west wall" }, l5: { num: "5", sub: "Living room · west wall" }, l6: { num: "6", sub: "Living room · west wall" },
   l7: { num: "7", sub: "Living room · north wall" }, l8: { num: "8", sub: "Living room · north wall" },
   lrh1: { num: "", sub: "Living room · hallway" },
@@ -112,7 +111,7 @@ function fireEvent(node, type, detail) {
 
 // --- static DOM builders (styles mirror the design prototype) ----------------
 const fabric = (slot, hem) =>
-  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid #C2B9A9;transition:height .45s ease"></div>`;
+  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease"></div>`;
 const offline = (slot) =>
   `<div data-offline="${slot}" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:${HATCH}"><span style="writing-mode:vertical-rl;font:700 10px ui-monospace,Menlo,monospace;letter-spacing:2px;color:#A2988A">OFFLINE</span></div>`;
 const flash = (slot, clip) =>
@@ -120,7 +119,7 @@ const flash = (slot, clip) =>
 const winRect = (slot, glass) =>
   `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 4)}${flash(slot)}${offline(slot)}</div>`;
 const label = (slot) =>
-  `<span data-label="${slot}" style="font:600 10px ui-monospace,Menlo,monospace;color:#8A8177"></span>`;
+  `<span data-label="${slot}" style="font:700 13px ui-monospace,Menlo,monospace;color:#6E6558;letter-spacing:.3px"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winRect(slot, glass)}${label(slot)}</div>`;
 // Sliding-door shade: a wide (~2.5-window) glass door whose fabric travels
@@ -131,7 +130,7 @@ const winDoor = (slot) =>
   `<div data-slot="${slot}" title="${slot}" style="position:relative;width:210px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${GLASS_LOWER};overflow:hidden;cursor:pointer">` +
     `<div style="position:absolute;top:0;bottom:0;left:33.33%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div style="position:absolute;top:0;bottom:0;left:66.66%;width:2px;background:rgba(31,27,23,.22)"></div>` +
-    `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:4px solid #C2B9A9;transition:width .45s ease"></div>` +
+    `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:4px solid ${HEM};transition:width .45s ease"></div>` +
     flash(slot) +
     offline(slot) +
   `</div>`;
@@ -169,21 +168,34 @@ const winAngled = (slot, h) => {
   // glass edge, matching the rectangles.
   const outer = roundedPath([[0, 0], [84, 40], [84, h], [0, h]], 3);
   const inner = roundedPath([[3, 4.75], [81, 41.9], [81, h - 3], [3, h - 3]], 0);
+  // Selection ring that follows the trapezoid: an accent outset (5px) with a
+  // 2px canvas-colored gap outset, drawn UNDER the frame (like the rectangle's
+  // 2px-gap + accent box-shadow). Offsets: left/right/bottom by d; the sliced
+  // top edge offsets to y=-1.584d (left) / 40-0.631d (right).
+  // Matches the rectangle windows' box-shadow ring exactly: a 2px canvas gap then
+  // 3px accent, outside the frame. A box-shadow of spread s rounds corners to
+  // (border-radius 3 + s), so the accent (out to 5px) rounds at 8 and the gap
+  // (out to 2px) at 5.
+  const ring = (d, r) => roundedPath([[-d, -1.584 * d], [84 + d, 40 - 0.631 * d], [84 + d, h + d], [-d, h + d]], r);
   return (
     `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:${h}px;cursor:pointer">` +
-      `<svg width="84" height="${h}" viewBox="0 0 84 ${h}" style="position:absolute;inset:0;display:block">` +
+      `<svg width="84" height="${h}" viewBox="0 0 84 ${h}" style="position:absolute;inset:0;display:block;overflow:visible">` +
         `<defs>` +
           `<linearGradient id="sd-g-${slot}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CBD6DC"/><stop offset="1" stop-color="#E2E2D6"/></linearGradient>` +
           `<clipPath id="sd-clip-${slot}" clipPathUnits="userSpaceOnUse"><path d="${inner}"/></clipPath>` +
         `</defs>` +
+        `<path data-ring="${slot}" d="${ring(5, 8)}" fill="${ACCENT}" style="display:none"/>` +
+        `<path data-ring="${slot}" d="${ring(2, 5)}" fill="#F5F1EA" style="display:none"/>` +
         `<path d="${outer}" fill="#1F1B17"/>` +
         `<path d="${inner}" fill="url(#sd-g-${slot})"/>` +
       `</svg>` +
-      `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid #C2B9A9;transition:height .45s ease;clip-path:url(#sd-clip-${slot})"></div>` +
+      `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease;clip-path:url(#sd-clip-${slot})"></div>` +
       flash(slot, true) +
     `</div>`
   );
 };
+const angledCol = (slot, h) =>
+  `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winAngled(slot, h)}${label(slot)}</div>`;
 const chip = (group, text) =>
   `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10px;letter-spacing:1.2px;color:#8A8177;font-weight:600">${text}</span>` +
     `<button data-group="${group}" data-dir="up" title="Open" style="width:30px;height:26px;border:1px solid #DFD7C9;background:#FFFDF9;border-radius:7px;cursor:pointer;font-size:10px;color:#4A4237;padding:0">▲</button>` +
@@ -192,6 +204,11 @@ const divider = () => `<div style="width:1px;align-self:stretch;background:#E0D8
 const sceneBtn = (key, s) =>
   `<button data-scene="${key}" style="text-align:left;padding:12px 14px;border:1px solid #E2DACB;border-radius:12px;background:#FFFDF9;cursor:pointer;display:flex;flex-direction:column;gap:3px">` +
     `<span style="font-weight:600;font-size:14px;color:#26211B">${s.title}</span><span style="font-size:11px;color:#8A8177">${s.desc}</span></button>`;
+const toggleRow = (key, t) =>
+  `<button data-toggle="${key}" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1px solid #E2DACB;border-radius:12px;background:#FFFDF9;cursor:pointer">` +
+    `<span style="display:flex;flex-direction:column;gap:3px;text-align:left"><span style="font-weight:600;font-size:14px;color:#26211B">${t.title}</span><span data-toggle-desc="${key}" style="font-size:11px;color:#8A8177"></span></span>` +
+    `<span data-toggle-switch="${key}" style="flex-shrink:0;width:40px;height:23px;border-radius:999px;background:#D9D2C4;position:relative;transition:background .2s"><span data-toggle-knob="${key}" style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#FFF;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></span>` +
+  `</button>`;
 
 class ShadeDashboardCard extends HTMLElement {
   constructor() {
@@ -311,30 +328,32 @@ class ShadeDashboardCard extends HTMLElement {
 
   _template() {
     const sc = this._layout.scenes;
+    const tg = this._layout.toggles || {};
     // South wall: three columns against the chimney
     const south =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
         `<div style="display:flex;align-items:stretch;gap:14px">` +
           // col 1: upper 1 over the front door
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">` +
-            winRect("u1", GLASS_UPPER) +
-            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:210px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:600 10px ui-monospace,Menlo,monospace;color:#B9B0A2">DOOR</span></div>` +
+            lowerCol("u1", GLASS_UPPER) +
+            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:210px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
           `</div>` +
           // col 2: upper 2 over lower 1
-          `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${winRect("u2", GLASS_UPPER)}${lowerCol("l1")}</div>` +
+          `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u2", GLASS_UPPER)}${lowerCol("l1")}</div>` +
           // chimney
           `<div style="width:84px;height:448px;align-self:flex-start;border-radius:3px 3px 0 0;background:repeating-linear-gradient(180deg,#D3CCBE 0 8px,#C6BDAD 8px 10px);position:relative"><div style="position:absolute;left:11px;right:11px;top:218px;height:42px;background:#26211B;border-radius:2px"></div><div style="position:absolute;left:8px;right:8px;bottom:12px;height:30px;background:#33291F;border-radius:2px"></div></div>` +
           // col 3: upper 3 over lower 2 (the offline one)
-          `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${winRect("u3", GLASS_UPPER)}${lowerCol("l2")}</div>` +
+          `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u3", GLASS_UPPER)}${lowerCol("l2")}</div>` +
         `</div>` +
         chip("south", "SOUTH WALL") +
       `</div>`;
     // West wall: 4 angled uppers over 4 lowers
     const west =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
-        // gap sized so the angled uppers' bottoms line up with the south-wall uppers' bottoms
-        `<div style="display:flex;flex-direction:column;gap:72px;align-items:center">` +
-          `<div style="display:flex;align-items:flex-end;gap:14px">${winAngled("u4", 190)}${winAngled("u5", 150)}${winAngled("u6", 110)}${winAngled("u7", 70)}</div>` +
+        // gap sized so the angled uppers' bottoms line up with the south-wall uppers'
+        // bottoms (the angled columns now include a label row below each window)
+        `<div style="display:flex;flex-direction:column;gap:48px;align-items:center">` +
+          `<div style="display:flex;align-items:flex-end;gap:14px">${angledCol("u4", 190)}${angledCol("u5", 150)}${angledCol("u6", 110)}${angledCol("u7", 70)}</div>` +
           `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("l3")}${lowerCol("l4")}${lowerCol("l5")}${lowerCol("l6")}</div>` +
         `</div>` +
         chip("west", "WEST WALL") +
@@ -406,14 +425,10 @@ class ShadeDashboardCard extends HTMLElement {
       <div data-sun-label style="text-align:center;font-size:11px;color:#8A8177"></div>
     </div>
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">SCENES</div>
-    ${sceneBtn("movie", sc.movie)}
     ${sceneBtn("open_all", sc.open_all)}
     ${sceneBtn("close_all", sc.close_all)}
-    <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">AUTOMATION</div>
-    <button data-auto-toggle style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1px solid #E2DACB;border-radius:12px;background:#FFFDF9;cursor:pointer">
-      <span style="display:flex;flex-direction:column;gap:3px;text-align:left"><span style="font-weight:600;font-size:14px;color:#26211B">Auto shades</span><span data-auto-desc style="font-size:11px;color:#8A8177">Sun &amp; sunset automation</span></span>
-      <span data-auto-switch style="flex-shrink:0;width:40px;height:23px;border-radius:999px;background:#D9D2C4;position:relative;transition:background .2s"><span data-auto-knob style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#FFF;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></span>
-    </button>
+    <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">MODES</div>
+    ${Object.keys(tg).map((k) => toggleRow(k, tg[k])).join("")}
     <div style="flex:1"></div>
     <div data-summary style="font-size:11px;color:#8A8177"></div>
   </div>
@@ -478,8 +493,9 @@ class ShadeDashboardCard extends HTMLElement {
     root.querySelectorAll("[data-scene]").forEach((el) =>
       el.addEventListener("click", () => this._scene(el.getAttribute("data-scene")))
     );
-    const autoBtn = root.querySelector("[data-auto-toggle]");
-    if (autoBtn) autoBtn.addEventListener("click", () => this._toggleAutomation());
+    root.querySelectorAll("[data-toggle]").forEach((el) =>
+      el.addEventListener("click", () => this._toggle(el.getAttribute("data-toggle")))
+    );
     // control bar
     root.querySelector("[data-bar-close]").addEventListener("click", () => { this._selected = null; this._update(); });
     // The UI shows a CLOSED percentage (0% = open, 100% = closed); HA's
@@ -552,12 +568,18 @@ class ShadeDashboardCard extends HTMLElement {
       this._update();
     }
   }
-  _toggleAutomation() {
-    const a = this._layout.automation;
-    if (!a || !this._hass) return;
-    const on = this._hass.states[a.entity] && this._hass.states[a.entity].state === "on";
-    const script = on ? a.disable_script : a.enable_script;
-    this._hass.callService("script", "turn_on", { entity_id: script });
+  _toggle(key) {
+    const t = (this._layout.toggles || {})[key];
+    if (!t || !this._hass) return;
+    const st = this._hass.states[t.entity];
+    const on = st && st.state === "on";
+    if (t.enable_script || t.disable_script) {
+      // Drive via scripts (they set the boolean AND do side effects e.g. reset timers)
+      const script = on ? t.disable_script : t.enable_script;
+      if (script) this._hass.callService("script", "turn_on", { entity_id: script });
+    } else {
+      this._hass.callService("input_boolean", on ? "turn_off" : "turn_on", { entity_id: t.entity });
+    }
   }
   _select(slot) {
     this._selected = this._selected === slot ? null : slot;
@@ -587,8 +609,16 @@ class ShadeDashboardCard extends HTMLElement {
       const off = root.querySelector(`[data-offline="${slot}"]`);
       const fl = root.querySelector(`[data-flash="${slot}"]`);
       const lab = root.querySelector(`[data-label="${slot}"]`);
-      const meta = SLOT_META[slot] || {};
-      if (win) win.style.boxShadow = this._selected === slot ? RING : "none";
+      const selected = this._selected === slot;
+      if (win) {
+        const rings = win.querySelectorAll("[data-ring]"); // angled windows draw the ring in SVG
+        if (rings.length) {
+          win.style.boxShadow = "none";
+          rings.forEach((p) => (p.style.display = selected ? "" : "none"));
+        } else {
+          win.style.boxShadow = selected ? RING : "none";
+        }
+      }
       if (win) win.classList.toggle("sd-moving", moving);
       if (fl) fl.classList.toggle("sd-flash-on", moving);
       if (off) off.style.display = unavailable ? "flex" : "none";
@@ -599,13 +629,12 @@ class ShadeDashboardCard extends HTMLElement {
       if (lab) {
         lab.classList.toggle("sd-moving-label", moving); // accent-tint the % while in motion
         if (unavailable) {
-          lab.textContent = meta.num != null ? `${meta.num} · —`.replace(/^ · /, "") : "—";
+          lab.textContent = "—";
           lab.style.color = "#B0563C";
         } else {
-          const closed = 100 - this._dispPos(slot); // closed %: 100 = closed, 0 = open (target while moving)
-          const num = meta.num;
-          lab.textContent = num ? `${num} · ${closed}%` : `${closed}%`;
-          if (!moving) lab.style.color = "#8A8177";
+          // Just the closed % (100 = closed, 0 = open); target while moving.
+          lab.textContent = `${100 - this._dispPos(slot)}%`;
+          if (!moving) lab.style.color = "#6E6558";
         }
       }
     }
@@ -624,16 +653,17 @@ class ShadeDashboardCard extends HTMLElement {
       el.style.background = this._lastScene === el.getAttribute("data-scene") ? SCENE_ACTIVE_BG : "#FFFDF9";
     });
 
-    // automation toggle state
-    const a = this._layout.automation;
-    const sw = root.querySelector("[data-auto-switch]");
-    if (a && sw) {
-      const st = this._hass.states[a.entity];
+    // toggle states (movie mode, auto shades)
+    for (const key of Object.keys(this._layout.toggles || {})) {
+      const t = this._layout.toggles[key];
+      const sw = root.querySelector(`[data-toggle-switch="${key}"]`);
+      if (!sw) continue;
+      const st = this._hass.states[t.entity];
       const on = st && st.state === "on";
       sw.style.background = on ? ACCENT : "#D9D2C4";
-      root.querySelector("[data-auto-knob]").style.left = on ? "19px" : "2px";
-      const desc = root.querySelector("[data-auto-desc]");
-      if (desc) desc.textContent = on ? "On · sun & sunset control" : "Off · manual only";
+      root.querySelector(`[data-toggle-knob="${key}"]`).style.left = on ? "19px" : "2px";
+      const desc = root.querySelector(`[data-toggle-desc="${key}"]`);
+      if (desc) desc.textContent = on ? t.desc_on : t.desc_off;
     }
 
     // summary

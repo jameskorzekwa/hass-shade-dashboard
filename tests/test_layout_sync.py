@@ -11,9 +11,9 @@ import re
 from pathlib import Path
 
 from custom_components.shade_dashboard.const import (
-    AUTOMATION,
     SCENES,
     SHADES,
+    TOGGLES,
     build_panel_config,
 )
 
@@ -45,15 +45,27 @@ def test_offline_shade_is_lower_2() -> None:
 
 
 def test_scene_buttons_wired() -> None:
-    assert SCENES["movie"]["script"] == "script.movie_mode"
     # Open/Close All route to the whole-house group (fires the gateway scene)
     assert SCENES["open_all"]["kind"] == "group" and SCENES["open_all"]["group"] == "all"
     assert SCENES["close_all"]["kind"] == "group" and SCENES["close_all"]["dir"] == "down"
+    assert "movie" not in SCENES  # Movie Mode is now a toggle
     assert "sunset" not in SCENES  # Sunset Mode dropped
-    assert "script.movie_mode" in CARD_JS.read_text()
 
 
-def test_group_scenes_and_automation() -> None:
+def test_toggles() -> None:
+    cfg = build_panel_config()
+    tg = cfg["toggles"]
+    # movie toggles the boolean directly; auto uses the enable/disable scripts
+    assert tg["movie"]["entity"] == "input_boolean.movie_mode"
+    assert "enable_script" not in tg["movie"]
+    assert tg["automation"]["entity"] == "input_boolean.shade_automation"
+    assert TOGGLES["automation"]["enable_script"] == "script.enable_shade_automation"
+    text = CARD_JS.read_text()
+    assert "input_boolean.movie_mode" in text
+    assert "input_boolean.shade_automation" in text
+
+
+def test_group_scenes() -> None:
     cfg = build_panel_config()
     gs = cfg["group_scenes"]
     # west composes the clean upper+lower sub-scenes (avoids the polluted "West")
@@ -64,12 +76,7 @@ def test_group_scenes_and_automation() -> None:
     # upstairs close avoids the uh2-missing scene; bedroom handled directly
     assert gs["upstairs"]["direct"] == ["cover.main_bedroom_shades"]
     assert gs["all"]["open"] == ["scene.living_room_gateway_open_all_shades"]
-    assert cfg["automation"]["entity"] == "input_boolean.shade_automation"
-    assert AUTOMATION["enable_script"] == "script.enable_shade_automation"
-    # card mirror references the automation boolean + a composed west scene
-    text = CARD_JS.read_text()
-    assert "input_boolean.shade_automation" in text
-    assert "west_upper_open" in text
+    assert "west_upper_open" in CARD_JS.read_text()
 
 
 def test_groups_resolve_to_entities() -> None:
