@@ -5,8 +5,11 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.shade_dashboard import _async_move_group
-from custom_components.shade_dashboard.const import SHADES, TRACKER_KEY, abstract_entity
+from custom_components.shade_dashboard.const import DOMAIN, SHADES, TRACKER_KEY, abstract_entity
 from custom_components.shade_dashboard.gateway import GatewayTracker
 
 
@@ -85,3 +88,28 @@ async def test_service_splits_tracked_and_untracked() -> None:
     dom, svc, data = hass.services.async_call.await_args.args[:3]
     assert (dom, svc) == ("cover", "set_cover_position")
     assert data == {"entity_id": abstract_entity("mbr1"), "position": 100}
+
+
+async def test_move_group_service_is_awaited_end_to_end(hass: HomeAssistant) -> None:
+    """Calling the service via HA's dispatch actually runs it (regression: a
+    lambda handler returned an un-awaited coroutine -> silent no-op)."""
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    tracker = hass.data[TRACKER_KEY]
+    tracker.has_gateway_id = lambda src: True
+    tracker.async_move_group = AsyncMock()
+
+    await hass.services.async_call(
+        "shade_dashboard",
+        "move_group",
+        {"entity_id": [abstract_entity("ko1")], "position": 100},
+        blocking=True,
+    )
+
+    tracker.async_move_group.assert_awaited_once()
+    sources, primary = tracker.async_move_group.await_args.args
+    assert sources == [SHADES["ko1"]]
+    assert primary == 1.0
