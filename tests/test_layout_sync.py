@@ -24,8 +24,10 @@ def _parse_js_shades() -> dict[str, str]:
     return dict(pairs)
 
 
-def test_all_21_shades_present() -> None:
-    assert len(SHADES) == 21
+def test_all_shades_present() -> None:
+    # 21 PowerView shades + the main-bedroom sliding-door shade
+    assert len(SHADES) == 22
+    assert SHADES["mbr1"] == "cover.main_bedroom_shades"
 
 
 def test_js_shade_map_matches_const() -> None:
@@ -48,8 +50,9 @@ def test_movie_scene_wired_others_placeholder() -> None:
 def test_groups_resolve_to_entities() -> None:
     cfg = build_panel_config()
     assert len(cfg["groups"]["main_floor"]) == 16
-    assert len(cfg["groups"]["upstairs"]) == 5
-    assert len(cfg["groups"]["all"]) == 21
+    assert len(cfg["groups"]["upstairs"]) == 6
+    assert len(cfg["groups"]["all"]) == 22
+    assert cfg["groups"]["main_bedroom"] == ["cover.main_bedroom_shades"]
     # every group entity is a real mapped cover
     mapped = set(SHADES.values())
     for entities in cfg["groups"].values():

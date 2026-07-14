@@ -39,9 +39,9 @@ async def test_setup_registers_card_and_panel(hass: HomeAssistant) -> None:
     kwargs = reg_panel.await_args.kwargs
     assert kwargs["frontend_url_path"] == "shades"
     assert kwargs["webcomponent_name"] == "shade-dashboard-card"
-    # the resolved layout (all 21 shades) is handed to the card via panel config
+    # the resolved layout (all 22 shades) is handed to the card via panel config
     layout = kwargs["config"]["layout"]
-    assert len(layout["shades"]) == 21
+    assert len(layout["shades"]) == 22
     assert layout["groups"]["all"]  # groups resolved to entity IDs
     assert hass.data[CARD_REGISTERED_KEY] is True
 

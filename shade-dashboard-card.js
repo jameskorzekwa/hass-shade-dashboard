@@ -49,6 +49,7 @@ const DEFAULT_LAYOUT = {
     uh3: { entity: "cover.hallway_shade_3_2" },
     ko1: { entity: "cover.kyle_s_office_shade_1" },
     ko2: { entity: "cover.kyle_s_office_shade_2" },
+    mbr1: { entity: "cover.main_bedroom_shades" },
   },
   groups: {
     south: ["cover.living_room_upper_shade_1", "cover.living_room_upper_shade_2_2", "cover.living_room_upper_shade_3_2", "cover.living_room_lower_shade_1", "cover.living_room_lower_shade_2"],
@@ -57,6 +58,7 @@ const DEFAULT_LAYOUT = {
     hallway: ["cover.living_room_hallway_shade_1_2"],
     upstairs_hallway: ["cover.hallway_shade_1_2", "cover.hallway_shade_2_2", "cover.hallway_shade_3_2"],
     office: ["cover.kyle_s_office_shade_1", "cover.kyle_s_office_shade_2"],
+    main_bedroom: ["cover.main_bedroom_shades"],
   },
   scenes: {
     movie: { title: "Movie Mode", desc: "Close everything", script: "script.movie_mode" },
@@ -72,7 +74,7 @@ const DEFAULT_LAYOUT = {
   },
 };
 DEFAULT_LAYOUT.groups.main_floor = [...DEFAULT_LAYOUT.groups.south, ...DEFAULT_LAYOUT.groups.west, ...DEFAULT_LAYOUT.groups.north, ...DEFAULT_LAYOUT.groups.hallway];
-DEFAULT_LAYOUT.groups.upstairs = [...DEFAULT_LAYOUT.groups.upstairs_hallway, ...DEFAULT_LAYOUT.groups.office];
+DEFAULT_LAYOUT.groups.upstairs = [...DEFAULT_LAYOUT.groups.main_bedroom, ...DEFAULT_LAYOUT.groups.upstairs_hallway, ...DEFAULT_LAYOUT.groups.office];
 DEFAULT_LAYOUT.groups.all = [...DEFAULT_LAYOUT.groups.main_floor, ...DEFAULT_LAYOUT.groups.upstairs];
 
 // Presentation metadata (label number + control-bar subtitle). Card-side only.
@@ -85,6 +87,7 @@ const SLOT_META = {
   lrh1: { num: "", sub: "Living room · hallway" },
   uh1: { num: "1", sub: "Upstairs · hallway" }, uh2: { num: "2", sub: "Upstairs · hallway" }, uh3: { num: "3", sub: "Upstairs · hallway" },
   ko1: { num: "1", sub: "Kyle's office" }, ko2: { num: "2", sub: "Kyle's office" },
+  mbr1: { num: "", sub: "Main bedroom · sliding doors" },
 };
 
 function fireEvent(node, type, detail) {
@@ -102,6 +105,19 @@ const label = (slot) =>
   `<span data-label="${slot}" style="font:600 10px ui-monospace,Menlo,monospace;color:#8A8177"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winRect(slot, glass)}${label(slot)}</div>`;
+// Sliding-door shade: a wide (~2.5-window) glass door whose fabric travels
+// HORIZONTALLY — anchored at the left (open), growing rightward to cover (closed).
+// width = (100 - position)% (the leading hem is on the right). `data-axis="x"`
+// tells _setFabric to animate width instead of height.
+const winDoor = (slot) =>
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:210px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${GLASS_LOWER};overflow:hidden;cursor:pointer">` +
+    `<div style="position:absolute;top:0;bottom:0;left:33.33%;width:2px;background:rgba(31,27,23,.22)"></div>` +
+    `<div style="position:absolute;top:0;bottom:0;left:66.66%;width:2px;background:rgba(31,27,23,.22)"></div>` +
+    `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:4px solid #C2B9A9;transition:width .45s ease"></div>` +
+    offline(slot) +
+  `</div>`;
+const doorCol = (slot) =>
+  `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winDoor(slot)}${label(slot)}</div>`;
 // SVG path for a rounded polygon (corner radius r) through the given [x,y] points.
 const roundedPath = (pts, r) => {
   const n = pts.length;
@@ -262,6 +278,12 @@ class ShadeDashboardCard extends HTMLElement {
         chip("hallway", "HALLWAY") +
       `</div>`;
 
+    const mainBedroom =
+      `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
+        `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">MAIN BEDROOM</span>` +
+        `<div style="display:flex;align-items:flex-end;gap:14px">${doorCol("mbr1")}</div>` +
+        chip("main_bedroom", "SLIDING DOORS") +
+      `</div>`;
     const upHall =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
         `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">UPSTAIRS HALLWAY</span>` +
@@ -290,7 +312,7 @@ class ShadeDashboardCard extends HTMLElement {
   <div class="rail">
     <div>
       <div style="font-size:19px;font-weight:700;letter-spacing:.3px">Shades</div>
-      <div style="font-size:11px;color:#8A8177;margin-top:2px">PowerView · 21 shades</div>
+      <div style="font-size:11px;color:#8A8177;margin-top:2px">22 shades</div>
     </div>
     <div data-sun-card style="display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2">
       <div style="position:relative;width:150px;height:66px;overflow:hidden;margin:0 auto">
@@ -329,11 +351,11 @@ class ShadeDashboardCard extends HTMLElement {
 
     <div data-panel="up" style="flex-direction:column;gap:8px;flex:1">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Upstairs</span><span style="font-size:12px;color:#8A8177">Hallway + Kyle's office · 5 shades</span></div>
+        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Upstairs</span><span style="font-size:12px;color:#8A8177">Main bedroom + hallway + office · 6 shades</span></div>
         <div style="display:flex;gap:8px"><button data-group="upstairs" data-dir="up" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Open floor</button><button data-group="upstairs" data-dir="down" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Close floor</button></div>
       </div>
       <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:48px">
-        ${upHall}${divider()}${office}
+        ${mainBedroom}${divider()}${upHall}${divider()}${office}
       </div>
     </div>
 
@@ -421,7 +443,10 @@ class ShadeDashboardCard extends HTMLElement {
   // --- live update -----------------------------------------------------------
   _setFabric(slot, pos) {
     const f = this.shadowRoot.querySelector(`[data-fabric="${slot}"]`);
-    if (f) f.style.height = `${Math.max(0, Math.min(100, 100 - pos))}%`;
+    if (!f) return;
+    const v = `${Math.max(0, Math.min(100, 100 - pos))}%`;
+    if (f.dataset.axis === "x") f.style.width = v;
+    else f.style.height = v;
   }
 
   _update() {
