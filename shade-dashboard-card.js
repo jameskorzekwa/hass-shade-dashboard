@@ -29,37 +29,37 @@ const SCENE_ACTIVE_BG = "color-mix(in oklab, #C67B3B 18%, #FFFDF9)";
 // Mirror of const.py (build_panel_config). Kept in sync by test_layout_sync.py.
 const DEFAULT_LAYOUT = {
   shades: {
-    u1: { entity: "cover.living_room_upper_shade_1" },
-    u2: { entity: "cover.living_room_upper_shade_2_2" },
-    u3: { entity: "cover.living_room_upper_shade_3_2" },
-    l1: { entity: "cover.living_room_lower_shade_1" },
-    l2: { entity: "cover.living_room_lower_shade_2" },
-    u4: { entity: "cover.living_room_upper_shade_4_2" },
-    u5: { entity: "cover.living_room_upper_shade_5_2" },
-    u6: { entity: "cover.living_room_upper_shade_6_2" },
-    u7: { entity: "cover.living_room_upper_shade_7" },
-    l3: { entity: "cover.living_room_lower_shade_3" },
-    l4: { entity: "cover.living_room_lower_shade_4_2" },
-    l5: { entity: "cover.living_room_lower_shade_5_2" },
-    l6: { entity: "cover.living_room_lower_shade_6_2" },
-    l7: { entity: "cover.living_room_lower_shade_7_2" },
-    l8: { entity: "cover.living_room_lower_shade_8_2" },
-    lrh1: { entity: "cover.living_room_hallway_shade_1_2" },
-    uh1: { entity: "cover.hallway_shade_1_2" },
-    uh2: { entity: "cover.hallway_shade_2_2" },
-    uh3: { entity: "cover.hallway_shade_3_2" },
-    ko1: { entity: "cover.kyle_s_office_shade_1" },
-    ko2: { entity: "cover.kyle_s_office_shade_2" },
-    mbr1: { entity: "cover.main_bedroom_shades" },
+    u1: { entity: "cover.shade_u1" },
+    u2: { entity: "cover.shade_u2" },
+    u3: { entity: "cover.shade_u3" },
+    l1: { entity: "cover.shade_l1" },
+    l2: { entity: "cover.shade_l2" },
+    u4: { entity: "cover.shade_u4" },
+    u5: { entity: "cover.shade_u5" },
+    u6: { entity: "cover.shade_u6" },
+    u7: { entity: "cover.shade_u7" },
+    l3: { entity: "cover.shade_l3" },
+    l4: { entity: "cover.shade_l4" },
+    l5: { entity: "cover.shade_l5" },
+    l6: { entity: "cover.shade_l6" },
+    l7: { entity: "cover.shade_l7" },
+    l8: { entity: "cover.shade_l8" },
+    lrh1: { entity: "cover.shade_lrh1" },
+    uh1: { entity: "cover.shade_uh1" },
+    uh2: { entity: "cover.shade_uh2" },
+    uh3: { entity: "cover.shade_uh3" },
+    ko1: { entity: "cover.shade_ko1" },
+    ko2: { entity: "cover.shade_ko2" },
+    mbr1: { entity: "cover.shade_mbr1" },
   },
   groups: {
-    south: ["cover.living_room_upper_shade_1", "cover.living_room_upper_shade_2_2", "cover.living_room_upper_shade_3_2", "cover.living_room_lower_shade_1", "cover.living_room_lower_shade_2"],
-    west: ["cover.living_room_upper_shade_4_2", "cover.living_room_upper_shade_5_2", "cover.living_room_upper_shade_6_2", "cover.living_room_upper_shade_7", "cover.living_room_lower_shade_3", "cover.living_room_lower_shade_4_2", "cover.living_room_lower_shade_5_2", "cover.living_room_lower_shade_6_2"],
-    north: ["cover.living_room_lower_shade_7_2", "cover.living_room_lower_shade_8_2"],
-    hallway: ["cover.living_room_hallway_shade_1_2"],
-    upstairs_hallway: ["cover.hallway_shade_1_2", "cover.hallway_shade_2_2", "cover.hallway_shade_3_2"],
-    office: ["cover.kyle_s_office_shade_1", "cover.kyle_s_office_shade_2"],
-    main_bedroom: ["cover.main_bedroom_shades"],
+    south: ["cover.shade_u1", "cover.shade_u2", "cover.shade_u3", "cover.shade_l1", "cover.shade_l2"],
+    west: ["cover.shade_u4", "cover.shade_u5", "cover.shade_u6", "cover.shade_u7", "cover.shade_l3", "cover.shade_l4", "cover.shade_l5", "cover.shade_l6"],
+    north: ["cover.shade_l7", "cover.shade_l8"],
+    hallway: ["cover.shade_lrh1"],
+    upstairs_hallway: ["cover.shade_uh1", "cover.shade_uh2", "cover.shade_uh3"],
+    office: ["cover.shade_ko1", "cover.shade_ko2"],
+    main_bedroom: ["cover.shade_mbr1"],
   },
   scenes: {
     open_all: { title: "Open All", desc: "Every shade up", kind: "group", group: "all", dir: "up" },
@@ -229,30 +229,13 @@ class ShadeDashboardCard extends HTMLElement {
     this._lastScene = null;
     this._tab = "main";
     this._layout = DEFAULT_LAYOUT;
-    // Optimistic targets: entity_id -> {target(HA pos 0-100), moving(bool)}.
-    // Set on command so the fabric jumps to the target immediately and the
-    // in-motion flash stays on until HA settles (current_position is stale while
-    // a shade is opening/closing). Reconciled/cleared in _reconcileOptimistic.
-    this._optimistic = {};
-    this._optTimers = {};
-    // Live gateway positions (from shade_dashboard_live_position events): the
-    // REAL position + motion while a shade physically travels, which HA doesn't
-    // report. entity_id -> position(0-100); _liveMoving = Set(entity_id).
-    this._live = {};
-    this._liveMoving = new Set();
-    this._liveSub = null;
-    // entity_id -> Date.now() when last commanded (flashes a tracked shade for a
-    // moment after a tap, before the gateway confirms motion).
+    // The unified cover.shade_* entities (see the integration's cover.py) now own
+    // all live-position tracking server-side: their current_position is already
+    // the display-ready live value (gateway feed for PowerView, source for RYSE)
+    // and their opening/closing state drives the in-motion flash. So the card
+    // just reads them. entity_id -> Date.now() at last tap keeps the flash
+    // instant before the cover's state update round-trips back.
     this._commanded = {};
-    // entity_id -> position to HOLD after a command until the gateway reports real
-    // motion. A tracked shade must NOT jump to the target (HA sets current_position
-    // optimistically); it stays put + flashes, then follows the live position.
-    this._holdPos = {};
-  }
-
-  _tracked(entity) {
-    if (!this._trackedSet) this._trackedSet = new Set(this._layout.tracked || []);
-    return this._trackedSet.has(entity);
   }
 
   setConfig(config) {
@@ -270,28 +253,10 @@ class ShadeDashboardCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._maybeBuild();
-    this._subscribeLive();
     this._update();
   }
   get hass() { return this._hass; }
 
-  // Subscribe once to the integration's live-position events.
-  _subscribeLive() {
-    if (this._liveSub || !this._hass || !this._hass.connection) return;
-    this._liveSub = true; // guard against re-subscribe while the promise resolves
-    this._hass.connection
-      .subscribeEvents((ev) => {
-        const d = (ev && ev.data) || {};
-        this._live = d.positions || {};
-        this._liveMoving = new Set(d.moving || []);
-        this._update();
-      }, "shade_dashboard_live_position")
-      .then((unsub) => { this._liveSub = unsub; })
-      .catch(() => { this._liveSub = null; });
-  }
-  disconnectedCallback() {
-    if (typeof this._liveSub === "function") { this._liveSub(); this._liveSub = null; }
-  }
   getCardSize() { return 12; }
 
   _entity(slot) {
@@ -302,6 +267,9 @@ class ShadeDashboardCard extends HTMLElement {
     const e = this._entity(slot);
     return e && this._hass ? this._hass.states[e] : undefined;
   }
+  // Position (0=closed..100=open) straight from the unified cover. The cover
+  // owns all live tracking, so its current_position is already the real,
+  // display-ready value — no client-side gateway logic needed anymore.
   _pos(slot) {
     const st = this._stateObj(slot);
     if (!st || st.state === "unavailable" || st.state === "unknown") return null;
@@ -309,128 +277,22 @@ class ShadeDashboardCard extends HTMLElement {
     if (p != null) return Math.round(p);
     return st.state === "open" ? 100 : 0; // no position support -> binary
   }
-  // Display position:
-  //  - gateway-tracked shades ALWAYS show the real live gateway position (or HA
-  //    current_position until the first live reading) — never an optimistic jump,
-  //    so the fabric follows the real shade instead of snapping to target & back.
-  //  - untracked shades (main bedroom) use the optimistic target for instant
-  //    feedback, then HA current_position.
   _dispPos(slot) {
-    const e = this._entity(slot);
-    if (e && this._tracked(e)) {
-      // 1. while physically moving: the REAL live gateway position
-      if (this._liveMoving.has(e) && this._live[e] != null) return this._live[e];
-      // 2. just commanded, not yet moving: HOLD (don't jump to HA's optimistic target)
-      if (this._holdPos[e] != null) return this._holdPos[e];
-      // 3. at rest: keep the last LIVE gateway reading (the poller keeps it fresh,
-      //    ~2s), clamped so the endpoints read clean 0/100. HA's current_position
-      //    lags the gateway badly right after a move — falling back to it here made
-      //    a finished shade snap back to a stale value, so only use it when we've
-      //    never had a live reading for this shade.
-      if (this._live[e] != null) return this._clampLive(this._live[e]);
-      return this._pos(slot);
-    }
-    if (e && this._optimistic[e]) return this._optimistic[e].target;
     return this._pos(slot);
   }
-  // Snap a live gateway reading to a clean endpoint: the gateway reports a
-  // fully-closed shade around 2-3% and fully-open around 97-98% (calibration
-  // offset from HA's 0/100), so at rest we round those to 0/100 to match HA's
-  // labels. Only applied at rest (branch 3) — motion shows the raw value so the
-  // fabric travels smoothly.
-  _clampLive(p) {
-    if (p <= 3) return 0;
-    if (p >= 97) return 100;
-    return p;
-  }
+  // In motion when the unified cover reports opening/closing, or briefly right
+  // after a tap so the flash is instant before the cover's state round-trips.
   _isMoving(slot) {
-    const e = this._entity(slot);
-    if (e && this._tracked(e)) {
-      if (this._liveMoving.has(e)) return true; // real gateway motion
-      return Date.now() - (this._commanded[e] || 0) < 12000; // commanded, awaiting the gateway
-    }
     const st = this._stateObj(slot);
     if (st && (st.state === "opening" || st.state === "closing")) return true;
-    return !!this._optimistic[e];
+    const e = this._entity(slot);
+    return Date.now() - (this._commanded[e] || 0) < 4000;
   }
 
-  // Record a commanded target for an entity and (re)arm a safety timeout.
-  // Mark a shade as just-commanded: tracked shades only flash briefly (they show
-  // the real live position, no jump); untracked shades get an optimistic target.
-  _mark(entity, target) {
-    if (!entity) return;
-    this._commanded[entity] = Date.now();
-    if (!this._tracked(entity)) {
-      this._setOptimistic(entity, target);
-      return;
-    }
-    // Capture the real position NOW (before HA optimistically snaps
-    // current_position to the target) so we can hold it until the gateway
-    // reports the shade actually moving.
-    const st = this._hass && this._hass.states[entity];
-    const cur = st && st.attributes.current_position;
-    this._holdPos[entity] = this._live[entity] != null ? this._live[entity] : cur != null ? Math.round(cur) : null;
-    // clear the hold if no motion is ever detected (e.g. a no-op command)
-    if (!this._cmdTimers) this._cmdTimers = {};
-    clearTimeout(this._cmdTimers[entity]);
-    this._cmdTimers[entity] = setTimeout(() => {
-      delete this._holdPos[entity];
-      this._update();
-    }, 12000);
-  }
-  _setOptimistic(entity, target) {
-    if (!entity) return;
-    this._optimistic[entity] = { target, moving: false };
-    clearTimeout(this._optTimers[entity]);
-    this._optTimers[entity] = setTimeout(() => {
-      delete this._optimistic[entity];
-      delete this._optTimers[entity];
-      this._update();
-    }, 45000);
-  }
-  _clearOptimistic(entity) {
-    delete this._optimistic[entity];
-    clearTimeout(this._optTimers[entity]);
-    delete this._optTimers[entity];
-  }
-  // Clear an optimistic target once HA has actually moved and settled (or the
-  // shade already sits at the target). Keeps showing the target across the brief
-  // gap before HA flips to opening/closing.
-  _reconcileOptimistic() {
-    for (const e of Object.keys(this._optimistic)) {
-      const st = this._hass.states[e];
-      if (!st) continue;
-      if (st.state === "opening" || st.state === "closing") {
-        this._optimistic[e].moving = true;
-        continue;
-      }
-      const cur = st.attributes.current_position;
-      const reached = cur == null || Math.abs(cur - this._optimistic[e].target) <= 2;
-      if (this._optimistic[e].moving || reached) this._clearOptimistic(e);
-    }
-  }
-
-  // Drop a tracked shade's command-hold once it has actually TRAVELLED and
-  // stopped, so the display returns to HA's (calibrated, settled) position.
-  // "Travelled" requires the live position to move meaningfully from where it
-  // started — a brief gateway position blip when the command is issued (the
-  // shades twitch before physically starting) must NOT count as motion, or the
-  // hold/flash would clear during the gap before the real move begins.
-  _reconcileTracked() {
-    if (!this._movedOnce) this._movedOnce = new Set();
-    for (const e of Object.keys(this._holdPos)) {
-      const live = this._live[e];
-      const travelled = live != null && Math.abs(live - this._holdPos[e]) > 3;
-      if (this._liveMoving.has(e) && travelled) {
-        this._movedOnce.add(e); // genuinely en route (not a startup blip)
-        if (this._cmdTimers) clearTimeout(this._cmdTimers[e]);
-      } else if (this._movedOnce.has(e) && !this._liveMoving.has(e)) {
-        delete this._holdPos[e];
-        delete this._commanded[e];
-        this._movedOnce.delete(e);
-        if (this._cmdTimers) clearTimeout(this._cmdTimers[e]);
-      }
-    }
+  // Flash a shade the instant it's tapped (the cover's opening/closing state
+  // takes over within a beat).
+  _mark(entity) {
+    if (entity) this._commanded[entity] = Date.now();
   }
 
   _maybeBuild() {
@@ -724,8 +586,6 @@ class ShadeDashboardCard extends HTMLElement {
   _update() {
     if (!this._built || !this._hass) return;
     const root = this.shadowRoot;
-    this._reconcileOptimistic();
-    this._reconcileTracked();
 
     // per-shade: fabric, label, offline, ring, in-motion flash
     for (const slot of Object.keys(this._layout.shades)) {
@@ -884,7 +744,7 @@ class ShadeDashboardCard extends HTMLElement {
     const dirWord =
       st && st.state === "opening" ? "Opening…"
       : st && st.state === "closing" ? "Closing…"
-      : this._dispPos(slot) >= this._pos(slot) ? "Opening…" : "Closing…";
+      : "Moving…"; // just tapped, before the cover reports a direction
     root.querySelector("[data-bar-sub]").textContent = moving ? dirWord : meta.sub || "";
     root.querySelector("[data-bar-ctl]").style.display = unavailable ? "none" : "flex";
     root.querySelector("[data-bar-unavail]").style.display = unavailable ? "block" : "none";

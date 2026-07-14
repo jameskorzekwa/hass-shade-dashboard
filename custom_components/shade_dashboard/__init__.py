@@ -27,8 +27,9 @@ _LOGGER = logging.getLogger(__name__)
 # Config-entry-only integration (set up from the UI, no YAML config).
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-# Companion live-position sensors (fed by the gateway tracker's events).
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+# Unified per-shade covers that front the real devices (see cover.py). Their
+# live current_position is fed by the gateway tracker's events.
+PLATFORMS: list[Platform] = [Platform.COVER]
 
 CARD_FILENAME = "shade-dashboard-card.js"
 CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
