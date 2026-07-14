@@ -214,9 +214,7 @@ class GatewayTracker:
             if now - self._last_recal.get(entity, 0.0) < CAL_RECAL_COOLDOWN:
                 continue  # already handled recently
             self._last_recal[entity] = now
-            _LOGGER.warning(
-                "Calibration drift: %s only reached %d%% open while the fleet opened fully", entity, m
-            )
+            _LOGGER.warning("Calibration drift: %s only reached %d%% open while the fleet opened fully", entity, m)
             await self._handle_drift(entity, m)
             break  # one per cycle — bound the blast radius if detection is wrong
 
