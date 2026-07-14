@@ -336,6 +336,53 @@ class ShadeDashboardCard extends HTMLElement {
     this._wire();
   }
 
+  // Settings view: what each bulk button triggers (the PowerView scenes / direct
+  // cover services behind every group open/close). Read-only for now.
+  _settingsHtml() {
+    const gs = this._layout.group_scenes || {};
+    const groups = this._layout.groups || {};
+    const LABELS = {
+      all: "Whole House — Open All / Close All",
+      main_floor: "Main Floor — Open / Close floor",
+      south: "South Wall",
+      west: "West Wall",
+      north: "North Wall",
+      hallway: "Main Hallway",
+      upstairs: "Upstairs — Open / Close floor",
+      main_bedroom: "Main Bedroom",
+      upstairs_hallway: "Upstairs Hallway",
+      office: "Kyle's Office",
+    };
+    const ORDER = ["all", "main_floor", "south", "west", "north", "hallway", "upstairs", "main_bedroom", "upstairs_hallway", "office"];
+    const renderId = (raw) => {
+      const direct = raw.endsWith(" (direct)");
+      const id = direct ? raw.slice(0, -9) : raw;
+      const st = this._hass && this._hass.states[id];
+      const fn = st && st.attributes && st.attributes.friendly_name;
+      const nm = fn || id.replace(/^scene\.living_room_gateway_/, "").replace(/_/g, " ");
+      return `<div style="display:flex;flex-direction:column;margin-bottom:2px"><span style="font-size:12px;color:#26211B">${nm}${direct ? ' <span style="color:#A79F90;font-size:10px">· direct cover</span>' : ""}</span><span style="font:500 10px ui-monospace,Menlo,monospace;color:#A79F90">${id}</span></div>`;
+    };
+    const line = (label, ids, fallback) => {
+      const body = ids.length ? ids.map(renderId).join("") : `<span style="font-size:11px;color:#A79F90;font-style:italic">${fallback}</span>`;
+      return `<div style="display:flex;gap:12px"><span style="flex-shrink:0;width:48px;color:#8A8177;font-size:12px;font-weight:600;padding-top:1px">${label}</span><div style="display:flex;flex-direction:column">${body}</div></div>`;
+    };
+    return ORDER.filter((g) => groups[g])
+      .map((g) => {
+        const spec = gs[g] || {};
+        const count = (groups[g] || []).length;
+        const direct = (spec.direct || []).map((e) => `${e} (direct)`);
+        const openIds = (spec.open || []).concat(direct);
+        const closeIds = (spec.close || []).concat(direct);
+        const noScene = !(spec.open || []).length && !(spec.close || []).length;
+        return `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+          <div style="font-weight:700;font-size:13.5px;color:#26211B">${LABELS[g] || g} <span style="font-weight:500;color:#8A8177;font-size:11px">· ${count} shade${count === 1 ? "" : "s"}</span></div>
+          ${line("Open", openIds, noScene ? "cover open — no scene" : "—")}
+          ${line("Close", closeIds, noScene ? "cover close — no scene" : "—")}
+        </div>`;
+      })
+      .join("");
+  }
+
   _template() {
     const sc = this._layout.scenes;
     const tg = this._layout.toggles || {};
@@ -447,9 +494,10 @@ class ShadeDashboardCard extends HTMLElement {
     <div data-summary style="font-size:11px;color:#8A8177"></div>
   </div>
   <div class="main">
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;align-items:center">
       <button data-tab="main" class="pill">Main Floor</button>
       <button data-tab="up" class="pill">Upstairs</button>
+      <button data-tab="settings" class="pill" title="Settings" style="margin-left:auto">⚙ Settings</button>
     </div>
 
     <div data-panel="main" style="flex-direction:column;gap:8px;flex:1;min-height:0;min-width:0">
@@ -471,6 +519,13 @@ class ShadeDashboardCard extends HTMLElement {
       </div>
       <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:48px">
         ${mainBedroom}${divider()}${upHall}${divider()}${office}
+      </div>
+    </div>
+
+    <div data-panel="settings" style="flex-direction:column;gap:8px;flex:1;min-height:0">
+      <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Settings</span><span style="font-size:12px;color:#8A8177">Which PowerView scenes each button triggers</span></div>
+      <div style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:2px 2px 8px">
+        ${this._settingsHtml()}
       </div>
     </div>
 
@@ -636,16 +691,24 @@ class ShadeDashboardCard extends HTMLElement {
     if (!this._built || !this._hass) return;
     const root = this.shadowRoot;
 
-    // Sync every in-motion pulse to a shared time grid so shades moving together
-    // flash in unison no matter when each started. All flash animations are 950ms;
-    // aligning each one to the same epoch via a negative animation-delay (set only
-    // on the rising edge, so it never re-bases mid-pulse) keeps them all in phase.
-    const PULSE_MS = 950;
-    const phaseDelay = `${-(Date.now() % PULSE_MS)}ms`;
+    // Flash every moving shade in UNISON: pin each pulse animation's startTime to
+    // a shared origin (0) via the Web Animations API, so they all ride the one
+    // document timeline at the same phase regardless of when each shade started.
+    // (A Date.now()-based animation-delay drifts because the animation actually
+    // starts on the next paint frame, not the JS tick — badly under throttling.)
     const flashToggle = (el, cls, on) => {
       if (!el) return;
-      if (on && !el.classList.contains(cls)) el.style.animationDelay = phaseDelay;
-      el.classList.toggle(cls, on);
+      const has = el.classList.contains(cls);
+      if (on && !has) {
+        el.classList.add(cls);
+        for (const a of el.getAnimations()) {
+          if (a.animationName && a.animationName.indexOf("sd-") === 0) {
+            try { a.startTime = 0; } catch (_e) { /* pre-WAAPI fallback: no sync */ }
+          }
+        }
+      } else if (!on && has) {
+        el.classList.remove(cls);
+      }
     };
 
     // per-shade: fabric, label, offline, ring, in-motion flash
@@ -701,6 +764,7 @@ class ShadeDashboardCard extends HTMLElement {
     });
     root.querySelector('[data-panel="main"]').style.display = this._tab === "main" ? "flex" : "none";
     root.querySelector('[data-panel="up"]').style.display = this._tab === "up" ? "flex" : "none";
+    root.querySelector('[data-panel="settings"]').style.display = this._tab === "settings" ? "flex" : "none";
 
     // scenes highlight
     root.querySelectorAll("[data-scene]").forEach((el) => {
@@ -802,7 +866,7 @@ class ShadeDashboardCard extends HTMLElement {
   _updateBar() {
     const root = this.shadowRoot;
     const bar = root.querySelector("[data-bar]");
-    if (!this._selected) { bar.style.display = "none"; return; }
+    if (!this._selected || this._tab === "settings") { bar.style.display = "none"; return; }
     bar.style.display = "flex";
     const slot = this._selected;
     const st = this._stateObj(slot);
