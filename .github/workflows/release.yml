@@ -74,13 +74,11 @@ jobs:
         run: |
           diff -q shade-dashboard-card.js custom_components/shade_dashboard/shade-dashboard-card.js \
             || { echo "::error::card copies differ — keep both byte-identical"; exit 1; }
-      - name: HACS validation
-        uses: hacs/action@main
-        with:
-          category: integration
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      # Note: hacs/action (public-store submission validation) is intentionally
+      # omitted — it reads the manifest via the GitHub API and can't validate a
+      # PRIVATE repo (returns "Got None"). hassfest below is the authoritative HA
+      # manifest validator and runs against the local checkout. If this repo is
+      # ever made public, hacs/action can be re-added.
       - name: Hassfest validation
         uses: home-assistant/actions/hassfest@master
 
