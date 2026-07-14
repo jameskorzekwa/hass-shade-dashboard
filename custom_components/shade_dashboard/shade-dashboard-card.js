@@ -130,6 +130,31 @@ const winDoor = (slot) =>
   `</div>`;
 const doorCol = (slot) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winDoor(slot)}${label(slot)}</div>`;
+// Compact mobile tiles — same data hooks (data-slot/fabric/flash/offline/label)
+// so _update/_setFabric/flash/selection all work unchanged.
+const mobileWin = (slot, glass) =>
+  `<div style="display:flex;flex-direction:column;align-items:center;gap:3px">` +
+    `<div data-slot="${slot}" title="${slot}" style="position:relative;width:46px;height:64px;border:2px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 3)}${flash(slot)}${offline(slot)}</div>` +
+    `<span data-label="${slot}" style="font:700 10px ui-monospace,Menlo,monospace;color:#6E6558"></span>` +
+  `</div>`;
+const mobileDoorTile = (slot) =>
+  `<div style="display:flex;flex-direction:column;align-items:center;gap:3px">` +
+    `<div data-slot="${slot}" title="${slot}" style="position:relative;width:132px;height:58px;border:2px solid #1F1B17;border-radius:3px;background:${GLASS_LOWER};overflow:hidden;cursor:pointer">` +
+      `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:3px solid ${HEM};transition:width .45s ease"></div>${flash(slot)}${offline(slot)}` +
+    `</div>` +
+    `<span data-label="${slot}" style="font:700 10px ui-monospace,Menlo,monospace;color:#6E6558"></span>` +
+  `</div>`;
+// In-motion flash CSS shared by both layouts.
+const FLASH_CSS = `
+  @keyframes sd-pulse { 0%,100% { outline-color: rgba(198,123,59,.95); } 50% { outline-color: rgba(198,123,59,.15); } }
+  .sd-moving { outline: 3px solid rgba(198,123,59,.95); outline-offset: 1px; border-radius: 3px; animation: sd-pulse .95s ease-in-out infinite; }
+  .sd-flash-ov { position:absolute; inset:0; background:${ACCENT}; opacity:0; pointer-events:none; }
+  @keyframes sd-flash-anim { 0%,100% { opacity:0; } 50% { opacity:.34; } }
+  .sd-flash-on { animation: sd-flash-anim .95s ease-in-out infinite; }
+  @keyframes sd-ring-pulse { 0%,100% { stroke-opacity:.95; } 50% { stroke-opacity:.12; } }
+  .sd-flash-ring-on { animation: sd-ring-pulse .95s ease-in-out infinite; }
+  @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+  .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }`;
 // SVG path for a rounded polygon (corner radius r) through the given [x,y] points.
 const roundedPath = (pts, r) => {
   const n = pts.length;
@@ -321,9 +346,33 @@ class ShadeDashboardCard extends HTMLElement {
         document.head.appendChild(l);
       }
     } catch (_e) { /* CSP may block; system font fallback is fine */ }
-    this.shadowRoot.innerHTML = this._template();
+    const mobile = this._isMobile();
+    this._builtMobile = mobile;
+    // Keep _tab valid for the layout being built (panels differ per layout).
+    if (mobile && this._tab !== "settings") this._tab = "home";
+    if (!mobile && this._tab === "home") this._tab = "main";
+    this.shadowRoot.innerHTML = mobile ? this._mobileTemplate() : this._template();
     this._built = true;
     this._wire();
+    this._installResize();
+  }
+
+  // Phone vs tablet by available width (the HA mobile app panel is full-viewport).
+  _isMobile() {
+    const w = this.clientWidth || (typeof window !== "undefined" && window.innerWidth) || 1024;
+    return w < 640;
+  }
+  // Rebuild the appropriate layout when the width crosses the breakpoint.
+  _installResize() {
+    if (this._ro || typeof ResizeObserver === "undefined") return;
+    this._ro = new ResizeObserver(() => {
+      if (this._built && this._isMobile() !== this._builtMobile) {
+        this._built = false;
+        this._maybeBuild();
+        this._update();
+      }
+    });
+    try { this._ro.observe(this); } catch (_e) { /* ignore */ }
   }
 
   // Settings view: which shades each bulk button moves. Groups move in sync via
@@ -436,19 +485,7 @@ class ShadeDashboardCard extends HTMLElement {
   .main { flex:1; position:relative; padding:20px 22px; display:flex; flex-direction:column; gap:14px; min-width:0; }
   input[type=range]{ accent-color:${ACCENT}; }
   .pill { padding:9px 18px; border-radius:999px; border:1px solid #E2DACB; cursor:pointer; font-weight:600; font-size:13px; }
-  /* In-motion feedback: the whole window flashes accent + a pulsing accent
-     outline. Uses outline (not box-shadow) so it composes with the selection
-     ring. The flash is a full-cover accent overlay (pointer-events:none). */
-  @keyframes sd-pulse { 0%,100% { outline-color: rgba(198,123,59,.95); } 50% { outline-color: rgba(198,123,59,.15); } }
-  .sd-moving { outline: 3px solid rgba(198,123,59,.95); outline-offset: 1px; border-radius: 3px; animation: sd-pulse .95s ease-in-out infinite; }
-  .sd-flash-ov { position:absolute; inset:0; background:${ACCENT}; opacity:0; pointer-events:none; }
-  @keyframes sd-flash-anim { 0%,100% { opacity:0; } 50% { opacity:.34; } }
-  .sd-flash-on { animation: sd-flash-anim .95s ease-in-out infinite; }
-  /* angled windows pulse an SVG stroke ring (follows the trapezoid) instead of the rect outline */
-  @keyframes sd-ring-pulse { 0%,100% { stroke-opacity:.95; } 50% { stroke-opacity:.12; } }
-  .sd-flash-ring-on { animation: sd-ring-pulse .95s ease-in-out infinite; }
-  @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
-  .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }
+  ${FLASH_CSS}
 </style>
 <div class="frame">
   <div class="rail">
@@ -521,6 +558,76 @@ class ShadeDashboardCard extends HTMLElement {
       </div>
       <div data-bar-unavail style="display:none;flex:1;font-size:12px;color:#E4B7A0">Unavailable in Home Assistant — check shade power or the PowerView gateway.</div>
     </div>
+  </div>
+</div>`;
+  }
+
+  // Phone layout: one vertical scroll — whole-house buttons, a card per section
+  // (open/close chip + compact tiles), modes, settings. Reuses every data hook
+  // (data-slot/fabric/flash/label, data-group/scene/toggle, data-bar-*) so
+  // _update/_wire/_setFabric/control-bar work unchanged.
+  _mobileTemplate() {
+    const tg = this._layout.toggles || {};
+    const isUpper = (s) => /^u\d/.test(s);
+    const SECTIONS = [
+      { label: "South Wall", group: "south", slots: ["u1", "u2", "u3", "l1", "l2"] },
+      { label: "West Wall", group: "west", slots: ["u4", "u5", "u6", "u7", "l3", "l4", "l5", "l6"] },
+      { label: "North Wall", group: "north", slots: ["l7", "l8"] },
+      { label: "Main Hallway", group: "hallway", slots: ["lrh1"] },
+      { label: "Main Bedroom", group: "main_bedroom", slots: ["mbr1"], door: true },
+      { label: "Upstairs Hallway", group: "upstairs_hallway", slots: ["uh1", "uh2", "uh3"] },
+      { label: "Kyle's Office", group: "office", slots: ["ko1", "ko2"] },
+    ];
+    const btn = (g, dir, txt) =>
+      `<button data-group="${g}" data-dir="${dir}" style="padding:7px 14px;border-radius:9px;border:1px solid #DFD7C9;background:#FBF8F2;font-weight:600;font-size:12px;color:#4A4237;cursor:pointer">${txt}</button>`;
+    const section = (s) =>
+      `<div style="border:1px solid #EAE2D4;border-radius:14px;background:#FFFDF9;padding:12px 12px 14px">` +
+        `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="font-weight:700;font-size:14px">${s.label}</span><div style="display:flex;gap:8px">${btn(s.group, "up", "Open")}${btn(s.group, "down", "Close")}</div></div>` +
+        `<div style="display:flex;flex-wrap:wrap;gap:12px 14px">${s.slots.map((slot) => (s.door ? mobileDoorTile(slot) : mobileWin(slot, isUpper(slot) ? GLASS_UPPER : GLASS_LOWER))).join("")}</div>` +
+      `</div>`;
+    const bigBtn = (scene, txt) =>
+      `<button data-scene="${scene}" style="flex:1;padding:15px;border-radius:12px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:700;font-size:14px;color:#26211B;cursor:pointer">${txt}</button>`;
+    return `
+<style>
+  :host { display:block; height:100%; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; }
+  * { box-sizing:border-box; }
+  button { font-family:inherit; }
+  input[type=range]{ accent-color:${ACCENT}; height:28px; }
+  .mframe { position:relative; width:100%; height:100%; background:#F5F1EA; display:flex; flex-direction:column; overflow:hidden; }
+  ${FLASH_CSS}
+</style>
+<div class="mframe">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;flex-shrink:0">
+    <div><div style="font-size:20px;font-weight:700">Shades</div><div data-summary style="font-size:11px;color:#8A8177;margin-top:1px"></div></div>
+    <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">⚙</button>
+  </div>
+
+  <div data-panel="home" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;gap:10px">${bigBtn("open_all", "Open All")}${bigBtn("close_all", "Close All")}</div>
+    ${SECTIONS.map(section).join("")}
+    <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:4px">MODES</div>
+    ${Object.keys(tg).map((k) => toggleRow(k, tg[k])).join("")}
+  </div>
+
+  <div data-panel="settings" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:none;flex-direction:column;gap:10px">
+    <button data-tab="home" style="align-self:flex-start;padding:9px 16px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:13px;color:#26211B;cursor:pointer">← Back</button>
+    <div style="font-size:18px;font-weight:700">Settings</div>
+    ${this._settingsHtml()}
+  </div>
+
+  <div data-bar style="position:absolute;left:10px;right:10px;bottom:12px;display:none;flex-direction:column;gap:10px;padding:12px 14px;background:#26211B;color:#F5F1EA;border-radius:16px;box-shadow:0 12px 34px rgba(30,25,18,.4)">
+    <div style="display:flex;align-items:center;gap:10px">
+      <button data-bar-close style="width:28px;height:28px;border-radius:50%;border:none;background:rgba(255,255,255,.12);color:#F5F1EA;font-size:14px;cursor:pointer;flex-shrink:0">✕</button>
+      <div style="flex:1;min-width:0"><div data-bar-name style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div><div data-bar-sub style="font-size:11px;color:#B8AF9F"></div></div>
+      <span data-bar-pct style="font:600 14px ui-monospace,Menlo,monospace;flex-shrink:0"></span>
+    </div>
+    <div data-bar-ctl style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">
+      <input data-bar-slider type="range" min="0" max="100" value="0" style="flex:1 1 100%">
+      <button data-bar-action="close" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#F5F1EA;font-weight:600;font-size:13px;cursor:pointer">Close</button>
+      <button data-bar-action="open" style="flex:1;padding:12px;border-radius:10px;border:none;background:${ACCENT};color:#FFF;font-weight:600;font-size:13px;cursor:pointer">Open</button>
+      <button data-bar-recal title="Re-teach this shade's travel limits" style="display:none;flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#B8AF9F;font-weight:600;font-size:13px;cursor:pointer">Recalibrate</button>
+    </div>
+    <div data-bar-unavail style="display:none;font-size:12px;color:#E4B7A0">Unavailable in Home Assistant — check shade power or the PowerView gateway.</div>
   </div>
 </div>`;
   }
@@ -731,9 +838,10 @@ class ShadeDashboardCard extends HTMLElement {
       el.style.background = active ? "#26211B" : "#FFFDF9";
       el.style.color = active ? "#F5F1EA" : "#4A4237";
     });
-    root.querySelector('[data-panel="main"]').style.display = this._tab === "main" ? "flex" : "none";
-    root.querySelector('[data-panel="up"]').style.display = this._tab === "up" ? "flex" : "none";
-    root.querySelector('[data-panel="settings"]').style.display = this._tab === "settings" ? "flex" : "none";
+    // Show the panel matching the active tab (works for both tablet + mobile layouts).
+    root.querySelectorAll("[data-panel]").forEach((p) => {
+      p.style.display = p.getAttribute("data-panel") === this._tab ? "flex" : "none";
+    });
 
     // scenes highlight
     root.querySelectorAll("[data-scene]").forEach((el) => {
@@ -835,6 +943,7 @@ class ShadeDashboardCard extends HTMLElement {
   _updateBar() {
     const root = this.shadowRoot;
     const bar = root.querySelector("[data-bar]");
+    if (!bar) return;
     if (!this._selected || this._tab === "settings") { bar.style.display = "none"; return; }
     bar.style.display = "flex";
     const slot = this._selected;
