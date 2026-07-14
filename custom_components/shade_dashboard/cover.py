@@ -58,9 +58,7 @@ async def async_setup_entry(
 ) -> None:
     """Create one unified cover per shade."""
     tracked = set(_tracked_entities())
-    async_add_entities(
-        ShadeCover(slot, source, source in tracked) for slot, source in SHADES.items()
-    )
+    async_add_entities(ShadeCover(slot, source, source in tracked) for slot, source in SHADES.items())
 
 
 class ShadeCover(CoverEntity):
@@ -71,10 +69,7 @@ class ShadeCover(CoverEntity):
     # The interface we implement; the actual set is narrowed to what the real
     # device supports in async_added_to_hass (RYSE has no STOP, for example).
     _SUPPORTED = (
-        CoverEntityFeature.OPEN
-        | CoverEntityFeature.CLOSE
-        | CoverEntityFeature.SET_POSITION
-        | CoverEntityFeature.STOP
+        CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
     )
     _attr_supported_features = _SUPPORTED
 
@@ -103,9 +98,7 @@ class ShadeCover(CoverEntity):
             src_features = st.attributes.get("supported_features")
             if src_features is not None:
                 self._attr_supported_features = self._SUPPORTED & CoverEntityFeature(int(src_features))
-        self.async_on_remove(
-            async_track_state_change_event(self.hass, [self._source], self._source_changed)
-        )
+        self.async_on_remove(async_track_state_change_event(self.hass, [self._source], self._source_changed))
         if self._tracked:
             self.async_on_remove(self.hass.bus.async_listen(LIVE_EVENT, self._live_event))
 
@@ -213,9 +206,7 @@ class ShadeCover(CoverEntity):
 
     async def async_stop_cover(self, **kwargs) -> None:
         """Stop the real cover."""
-        await self.hass.services.async_call(
-            "cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False
-        )
+        await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
 
     async def _command(self, target: int) -> None:
         """Route a movement to the real device, holding position until it moves."""

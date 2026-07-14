@@ -21,9 +21,7 @@ from custom_components.shade_dashboard.cover import ShadeCover
 async def _setup(hass: HomeAssistant) -> None:
     # seed the real source covers so the abstractions can follow them
     for source in SHADES.values():
-        hass.states.async_set(
-            source, "open", {"current_position": 100, "friendly_name": source}
-        )
+        hass.states.async_set(source, "open", {"current_position": 100, "friendly_name": source})
     entry = MockConfigEntry(domain=DOMAIN, data={})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
