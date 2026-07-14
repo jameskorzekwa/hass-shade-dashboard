@@ -280,6 +280,12 @@ class ShadeDashboardCard extends HTMLElement {
   _dispPos(slot) {
     return this._pos(slot);
   }
+  // Readout for a closed-% value: word at the extremes, number in between.
+  _posLabel(closed) {
+    if (closed <= 0) return "Open";
+    if (closed >= 100) return "Closed";
+    return `${closed}%`;
+  }
   // In motion when the unified cover reports opening/closing, or briefly right
   // after a tap so the flash is instant before the cover's state round-trips.
   _isMoving(slot) {
@@ -321,12 +327,12 @@ class ShadeDashboardCard extends HTMLElement {
           // col 1: upper 1 over the front door
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">` +
             lowerCol("u1", GLASS_UPPER) +
-            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:210px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
+            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
           `</div>` +
           // col 2: upper 2 over lower 1
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u2", GLASS_UPPER)}${lowerCol("l1")}</div>` +
           // chimney
-          `<div style="width:84px;height:448px;align-self:flex-start;border-radius:3px 3px 0 0;background:repeating-linear-gradient(180deg,#D3CCBE 0 8px,#C6BDAD 8px 10px);position:relative"><div style="position:absolute;left:11px;right:11px;top:218px;height:42px;background:#26211B;border-radius:2px"></div><div style="position:absolute;left:8px;right:8px;bottom:12px;height:30px;background:#33291F;border-radius:2px"></div></div>` +
+          `<div style="width:84px;height:448px;align-self:flex-start;border-radius:3px 3px 0 0;background:repeating-linear-gradient(180deg,#D3CCBE 0 8px,#C6BDAD 8px 10px)"></div>` +
           // col 3: upper 3 over lower 2 (the offline one)
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u3", GLASS_UPPER)}${lowerCol("l2")}</div>` +
         `</div>` +
@@ -375,7 +381,8 @@ class ShadeDashboardCard extends HTMLElement {
 
     return `
 <style>
-  :host { display:block; height:100%; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; }
+  /* Scale the whole panel up for easier touch control on the small wall tablet. */
+  :host { display:block; height:100%; zoom:1.15; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; }
   * { box-sizing:border-box; }
   button { font-family:inherit; }
   .frame { width:100%; height:100%; min-height:640px; background:#F5F1EA; display:flex; overflow:hidden; }
@@ -453,7 +460,7 @@ class ShadeDashboardCard extends HTMLElement {
       <div style="min-width:200px"><div data-bar-name style="font-weight:600;font-size:14px"></div><div data-bar-sub style="font-size:11px;color:#B8AF9F"></div></div>
       <div data-bar-ctl style="display:flex;align-items:center;gap:12px;flex:1">
         <input data-bar-slider type="range" min="0" max="100" value="0" style="flex:1">
-        <span data-bar-pct style="font:600 13px ui-monospace,Menlo,monospace;min-width:44px;text-align:right"></span>
+        <span data-bar-pct style="font:600 13px ui-monospace,Menlo,monospace;min-width:62px;text-align:right"></span>
         <button data-bar-action="close" style="padding:8px 14px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#F5F1EA;cursor:pointer;font-weight:600;font-size:12px">Close</button>
         <button data-bar-action="open" style="padding:8px 14px;border-radius:9px;border:none;background:${ACCENT};color:#FFF;cursor:pointer;font-weight:600;font-size:12px">Open</button>
       </div>
@@ -492,7 +499,7 @@ class ShadeDashboardCard extends HTMLElement {
     slider.addEventListener("input", () => {
       this._dragging = true;
       const closed = Number(slider.value);
-      root.querySelector("[data-bar-pct]").textContent = `${closed}%`;
+      root.querySelector("[data-bar-pct]").textContent = this._posLabel(closed);
       if (this._selected) this._setFabric(this._selected, 100 - closed);
     });
     slider.addEventListener("change", () => {
@@ -587,6 +594,18 @@ class ShadeDashboardCard extends HTMLElement {
     if (!this._built || !this._hass) return;
     const root = this.shadowRoot;
 
+    // Sync every in-motion pulse to a shared time grid so shades moving together
+    // flash in unison no matter when each started. All flash animations are 950ms;
+    // aligning each one to the same epoch via a negative animation-delay (set only
+    // on the rising edge, so it never re-bases mid-pulse) keeps them all in phase.
+    const PULSE_MS = 950;
+    const phaseDelay = `${-(Date.now() % PULSE_MS)}ms`;
+    const flashToggle = (el, cls, on) => {
+      if (!el) return;
+      if (on && !el.classList.contains(cls)) el.style.animationDelay = phaseDelay;
+      el.classList.toggle(cls, on);
+    };
+
     // per-shade: fabric, label, offline, ring, in-motion flash
     for (const slot of Object.keys(this._layout.shades)) {
       const st = this._stateObj(slot);
@@ -608,25 +627,25 @@ class ShadeDashboardCard extends HTMLElement {
         }
         // Motion outline: angled -> pulse the SVG trapezoid ring; rect/door -> CSS outline.
         if (flashRing.length) {
-          flashRing.forEach((p) => p.classList.toggle("sd-flash-ring-on", moving));
+          flashRing.forEach((p) => flashToggle(p, "sd-flash-ring-on", moving));
         } else {
-          win.classList.toggle("sd-moving", moving);
+          flashToggle(win, "sd-moving", moving);
         }
       }
-      if (fl) fl.classList.toggle("sd-flash-on", moving);
+      flashToggle(fl, "sd-flash-on", moving);
       if (off) off.style.display = unavailable ? "flex" : "none";
       if (win) win.style.borderColor = unavailable ? "#B5AC9D" : "#1F1B17";
       // Render the display position (commanded target while moving) unless the
       // user is actively dragging this slot's slider.
       if (!unavailable && !this._dragging) this._setFabric(slot, this._dispPos(slot));
       if (lab) {
-        lab.classList.toggle("sd-moving-label", moving); // accent-tint the % while in motion
+        flashToggle(lab, "sd-moving-label", moving); // accent-tint the % while in motion
         if (unavailable) {
           lab.textContent = "—";
           lab.style.color = "#B0563C";
         } else {
-          // Just the closed % (100 = closed, 0 = open); target while moving.
-          lab.textContent = `${100 - this._dispPos(slot)}%`;
+          // Open/Closed at the extremes, closed % in between; target while moving.
+          lab.textContent = this._posLabel(100 - this._dispPos(slot));
           if (!moving) lab.style.color = "#6E6558";
         }
       }
@@ -753,7 +772,7 @@ class ShadeDashboardCard extends HTMLElement {
     if (!unavailable && !this._dragging) {
       const closed = 100 - this._dispPos(slot); // slider + readout are closed % (target while moving)
       root.querySelector("[data-bar-slider]").value = String(closed);
-      pctEl.textContent = `${closed}%`;
+      pctEl.textContent = this._posLabel(closed);
     }
   }
 }
