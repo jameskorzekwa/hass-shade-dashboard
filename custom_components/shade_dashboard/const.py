@@ -68,10 +68,10 @@ _GROUP_SLOTS["upstairs"] = _GROUP_SLOTS["main_bedroom"] + _GROUP_SLOTS["upstairs
 _GROUP_SLOTS["all"] = _GROUP_SLOTS["main_floor"] + _GROUP_SLOTS["upstairs"]
 
 # --- Left-rail scene buttons -------------------------------------------------
-# Movie Mode fires a script; Open All / Close All route to the "all" group (which
-# fires the whole-house PowerView scene). ``kind`` tells the card how to act.
+# Open All / Close All route to the "all" group (which fires the whole-house
+# PowerView scene). ``kind`` tells the card how to act. (Movie Mode is a toggle,
+# see TOGGLES.)
 SCENES: dict[str, dict] = {
-    "movie": {"title": "Movie Mode", "desc": "Close everything", "kind": "script", "script": "script.movie_mode"},
     "open_all": {"title": "Open All", "desc": "Every shade up", "kind": "group", "group": "all", "dir": "up"},
     "close_all": {"title": "Close All", "desc": "Every shade down", "kind": "group", "group": "all", "dir": "down"},
 }
@@ -108,14 +108,26 @@ _GROUP_SCENES: dict[str, dict] = {
     # main_bedroom has no gateway scene -> the card uses cover services.
 }
 
-# --- Shade-automation master toggle (single source of truth) -----------------
-# input_boolean.shade_automation gates all 7 HA shade automations. The card
-# reflects its state and flips it via the enable/disable scripts (enable also
-# resets the glare debounce timers).
-AUTOMATION: dict[str, str] = {
-    "entity": "input_boolean.shade_automation",
-    "enable_script": "script.enable_shade_automation",
-    "disable_script": "script.disable_shade_automation",
+# --- Left-rail toggles -------------------------------------------------------
+# Each reflects an input_boolean and flips it on tap. ``automation`` uses the
+# enable/disable scripts (which set the boolean AND reset the glare debounce
+# timers); ``movie`` toggles input_boolean.movie_mode directly (HA's "Control
+# Movie Mode" automation runs the movie/disable-movie scripts off that boolean).
+TOGGLES: dict[str, dict] = {
+    "movie": {
+        "title": "Movie Mode",
+        "desc_on": "On · everything closed",
+        "desc_off": "Off",
+        "entity": "input_boolean.movie_mode",
+    },
+    "automation": {
+        "title": "Auto shades",
+        "desc_on": "On · sun & sunset control",
+        "desc_off": "Off · manual only",
+        "entity": "input_boolean.shade_automation",
+        "enable_script": "script.enable_shade_automation",
+        "disable_script": "script.disable_shade_automation",
+    },
 }
 
 # --- Sun widget sources ------------------------------------------------------
@@ -153,5 +165,5 @@ def build_panel_config() -> dict:
         "group_scenes": _resolve_group_scenes(),
         "scenes": SCENES,
         "sun": SUN,
-        "automation": AUTOMATION,
+        "toggles": TOGGLES,
     }
