@@ -41,9 +41,16 @@ from homeassistant.const import (
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
-from .const import DOMAIN, LIVE_EVENT, SHADES, TRACKER_KEY, _tracked_entities
+from .const import (
+    CALIBRATING_EVENT,
+    DOMAIN,
+    LIVE_EVENT,
+    SHADES,
+    TRACKER_KEY,
+    _tracked_entities,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,6 +111,24 @@ class ShadeCover(CoverEntity):
         self.async_on_remove(async_track_state_change_event(self.hass, [self._source], self._source_changed))
         if self._tracked:
             self.async_on_remove(self.hass.bus.async_listen(LIVE_EVENT, self._live_event))
+            self.async_on_remove(self.hass.bus.async_listen(CALIBRATING_EVENT, self._calibrating_event))
+
+    @callback
+    def _calibrating_event(self, event: Event) -> None:
+        """Reflect a calibration lock start/stop for this shade."""
+        if event.data.get("entity_id") != self._source:
+            return
+        self.async_write_ha_state()
+        secs = event.data.get("seconds") or 0
+        if secs > 0:
+            # Refresh once when the lock expires so `calibrating` clears itself
+            # even if no more live events arrive after the shade settles.
+            async_call_later(self.hass, secs + 1, lambda _now: self.async_write_ha_state())
+
+    def _is_calibrating(self) -> bool:
+        """Whether this shade is locked mid-calibration."""
+        tracker = self.hass.data.get(TRACKER_KEY)
+        return bool(tracker is not None and tracker.is_calibrating(self._source))
 
     def _resolve_meta(self) -> bool:
         """Copy name + supported features from the source once it's available.
@@ -190,6 +215,11 @@ class ShadeCover(CoverEntity):
         pos = self.current_cover_position
         return None if pos is None else pos == 0
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose whether the shade is locked mid-calibration (for the card)."""
+        return {"calibrating": self._is_calibrating()}
+
     def _tracked_direction(self) -> str | None:
         """Infer travel direction from the last two live readings."""
         if self._prev_live is not None and self._live is not None:
@@ -230,7 +260,16 @@ class ShadeCover(CoverEntity):
 
     async def async_stop_cover(self, **kwargs) -> None:
         """Stop the real cover."""
+        if self._blocked_by_calibration():
+            return
         await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
+
+    def _blocked_by_calibration(self) -> bool:
+        """True (and logs) if a command must be refused while calibrating."""
+        if self._is_calibrating():
+            _LOGGER.info("%s is calibrating; ignoring command until it finishes", self.entity_id)
+            return True
+        return False
 
     async def async_recalibrate(self) -> None:
         """Re-teach this shade's PowerView travel limits (gateway BLE relay).
@@ -250,6 +289,8 @@ class ShadeCover(CoverEntity):
 
     async def _command(self, target: int) -> None:
         """Route a movement to the real device, holding position until it moves."""
+        if self._blocked_by_calibration():
+            return
         # For tracked shades with no live reading yet (only right after a
         # restart), hold the pre-command position so we don't briefly show the
         # source cover's optimistic jump.
