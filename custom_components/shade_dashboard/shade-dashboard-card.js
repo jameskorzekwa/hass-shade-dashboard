@@ -99,8 +99,10 @@ const fabric = (slot, hem) =>
   `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid #C2B9A9;transition:height .45s ease"></div>`;
 const offline = (slot) =>
   `<div data-offline="${slot}" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:${HATCH}"><span style="writing-mode:vertical-rl;font:700 10px ui-monospace,Menlo,monospace;letter-spacing:2px;color:#A2988A">OFFLINE</span></div>`;
+const flash = (slot, clip) =>
+  `<div data-flash="${slot}" class="sd-flash-ov" style="${clip ? `clip-path:url(#sd-clip-${slot})` : "border-radius:3px"}"></div>`;
 const winRect = (slot, glass) =>
-  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 4)}${offline(slot)}</div>`;
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 4)}${flash(slot)}${offline(slot)}</div>`;
 const label = (slot) =>
   `<span data-label="${slot}" style="font:600 10px ui-monospace,Menlo,monospace;color:#8A8177"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
@@ -114,6 +116,7 @@ const winDoor = (slot) =>
     `<div style="position:absolute;top:0;bottom:0;left:33.33%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div style="position:absolute;top:0;bottom:0;left:66.66%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:4px solid #C2B9A9;transition:width .45s ease"></div>` +
+    flash(slot) +
     offline(slot) +
   `</div>`;
 const doorCol = (slot) =>
@@ -161,6 +164,7 @@ const winAngled = (slot, h) => {
         `<path d="${inner}" fill="url(#sd-g-${slot})"/>` +
       `</svg>` +
       `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid #C2B9A9;transition:height .45s ease;clip-path:url(#sd-clip-${slot})"></div>` +
+      flash(slot, true) +
     `</div>`
   );
 };
@@ -183,6 +187,12 @@ class ShadeDashboardCard extends HTMLElement {
     this._lastScene = null;
     this._tab = "main";
     this._layout = DEFAULT_LAYOUT;
+    // Optimistic targets: entity_id -> {target(HA pos 0-100), moving(bool)}.
+    // Set on command so the fabric jumps to the target immediately and the
+    // in-motion flash stays on until HA settles (current_position is stale while
+    // a shade is opening/closing). Reconciled/cleared in _reconcileOptimistic.
+    this._optimistic = {};
+    this._optTimers = {};
   }
 
   setConfig(config) {
@@ -219,6 +229,52 @@ class ShadeDashboardCard extends HTMLElement {
     const p = st.attributes.current_position;
     if (p != null) return Math.round(p);
     return st.state === "open" ? 100 : 0; // no position support -> binary
+  }
+  // Display position: the commanded target while a command is in flight, else
+  // the live current_position — so the shade jumps to where it's going and holds.
+  _dispPos(slot) {
+    const e = this._entity(slot);
+    if (e && this._optimistic[e]) return this._optimistic[e].target;
+    return this._pos(slot);
+  }
+  _isMoving(slot) {
+    const st = this._stateObj(slot);
+    const e = this._entity(slot);
+    if (st && (st.state === "opening" || st.state === "closing")) return true;
+    return !!(e && this._optimistic[e]);
+  }
+
+  // Record a commanded target for an entity and (re)arm a safety timeout.
+  _setOptimistic(entity, target) {
+    if (!entity) return;
+    this._optimistic[entity] = { target, moving: false };
+    clearTimeout(this._optTimers[entity]);
+    this._optTimers[entity] = setTimeout(() => {
+      delete this._optimistic[entity];
+      delete this._optTimers[entity];
+      this._update();
+    }, 45000);
+  }
+  _clearOptimistic(entity) {
+    delete this._optimistic[entity];
+    clearTimeout(this._optTimers[entity]);
+    delete this._optTimers[entity];
+  }
+  // Clear an optimistic target once HA has actually moved and settled (or the
+  // shade already sits at the target). Keeps showing the target across the brief
+  // gap before HA flips to opening/closing.
+  _reconcileOptimistic() {
+    for (const e of Object.keys(this._optimistic)) {
+      const st = this._hass.states[e];
+      if (!st) continue;
+      if (st.state === "opening" || st.state === "closing") {
+        this._optimistic[e].moving = true;
+        continue;
+      }
+      const cur = st.attributes.current_position;
+      const reached = cur == null || Math.abs(cur - this._optimistic[e].target) <= 2;
+      if (this._optimistic[e].moving || reached) this._clearOptimistic(e);
+    }
   }
 
   _maybeBuild() {
@@ -307,12 +363,16 @@ class ShadeDashboardCard extends HTMLElement {
   .main { flex:1; position:relative; padding:20px 22px; display:flex; flex-direction:column; gap:14px; min-width:0; }
   input[type=range]{ accent-color:${ACCENT}; }
   .pill { padding:9px 18px; border-radius:999px; border:1px solid #E2DACB; cursor:pointer; font-weight:600; font-size:13px; }
-  /* Pulsing accent outline while a shade is physically opening/closing. Uses
-     outline (not box-shadow) so it composes with the selection ring. */
-  @keyframes sd-pulse { 0%,100% { outline-color: rgba(198,123,59,.9); } 50% { outline-color: rgba(198,123,59,.12); } }
-  .sd-moving { outline: 2px solid rgba(198,123,59,.9); outline-offset: 2px; border-radius: 3px; animation: sd-pulse 1.05s ease-in-out infinite; }
-  @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
-  .sd-moving-label { color:${ACCENT} !important; animation: sd-blink 1.05s ease-in-out infinite; }
+  /* In-motion feedback: the whole window flashes accent + a pulsing accent
+     outline. Uses outline (not box-shadow) so it composes with the selection
+     ring. The flash is a full-cover accent overlay (pointer-events:none). */
+  @keyframes sd-pulse { 0%,100% { outline-color: rgba(198,123,59,.95); } 50% { outline-color: rgba(198,123,59,.15); } }
+  .sd-moving { outline: 3px solid rgba(198,123,59,.95); outline-offset: 1px; border-radius: 3px; animation: sd-pulse .95s ease-in-out infinite; }
+  .sd-flash-ov { position:absolute; inset:0; background:${ACCENT}; opacity:0; pointer-events:none; }
+  @keyframes sd-flash-anim { 0%,100% { opacity:0; } 50% { opacity:.34; } }
+  .sd-flash-on { animation: sd-flash-anim .95s ease-in-out infinite; }
+  @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+  .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }
 </style>
 <div class="frame">
   <div class="rail">
@@ -411,14 +471,14 @@ class ShadeDashboardCard extends HTMLElement {
     });
     slider.addEventListener("change", () => {
       this._dragging = false;
-      if (this._selected) this._callCover("set_cover_position", this._entity(this._selected), { position: 100 - Number(slider.value) });
+      if (!this._selected) return;
+      const target = 100 - Number(slider.value);
+      this._setOptimistic(this._entity(this._selected), target);
+      this._callCover("set_cover_position", this._entity(this._selected), { position: target });
+      this._update();
     });
-    root.querySelector('[data-bar-action="open"]').addEventListener("click", () => {
-      if (this._selected) this._callCover("open_cover", this._entity(this._selected));
-    });
-    root.querySelector('[data-bar-action="close"]').addEventListener("click", () => {
-      if (this._selected) this._callCover("close_cover", this._entity(this._selected));
-    });
+    root.querySelector('[data-bar-action="open"]').addEventListener("click", () => this._commandSelected("open_cover", 100));
+    root.querySelector('[data-bar-action="close"]').addEventListener("click", () => this._commandSelected("close_cover", 0));
   }
 
   // --- actions ---------------------------------------------------------------
@@ -426,13 +486,25 @@ class ShadeDashboardCard extends HTMLElement {
     if (!entity || !this._hass) return;
     this._hass.callService("cover", service, Object.assign({ entity_id: entity }, extra || {}));
   }
+  _commandSelected(service, target) {
+    if (!this._selected) return;
+    this._setOptimistic(this._entity(this._selected), target);
+    this._callCover(service, this._entity(this._selected));
+    this._update();
+  }
   _group(group, dir) {
     const entities = (this._layout.groups[group] || []).filter((e) => {
       const st = this._hass && this._hass.states[e];
       return st && st.state !== "unavailable";
     });
     if (!entities.length) return;
+    const target = dir === "up" ? 100 : 0;
+    // Optimistically target EVERY shade in the group so they all jump + flash at
+    // once (one service call fires them together; the gateway may still move them
+    // sequentially, but the dashboard shows the whole group in motion).
+    entities.forEach((e) => this._setOptimistic(e, target));
     this._callCover(dir === "up" ? "open_cover" : "close_cover", entities);
+    this._update();
   }
   _scene(key) {
     const s = this._layout.scenes[key];
@@ -461,34 +533,36 @@ class ShadeDashboardCard extends HTMLElement {
   _update() {
     if (!this._built || !this._hass) return;
     const root = this.shadowRoot;
+    this._reconcileOptimistic();
 
-    // per-shade: fabric, label, offline, ring
+    // per-shade: fabric, label, offline, ring, in-motion flash
     for (const slot of Object.keys(this._layout.shades)) {
       const st = this._stateObj(slot);
       const unavailable = !st || st.state === "unavailable";
-      const moving = st && (st.state === "opening" || st.state === "closing");
+      const moving = !unavailable && this._isMoving(slot);
       const win = root.querySelector(`[data-slot="${slot}"]`);
       const off = root.querySelector(`[data-offline="${slot}"]`);
+      const fl = root.querySelector(`[data-flash="${slot}"]`);
       const lab = root.querySelector(`[data-label="${slot}"]`);
       const meta = SLOT_META[slot] || {};
       if (win) win.style.boxShadow = this._selected === slot ? RING : "none";
-      if (win) win.classList.toggle("sd-moving", !!moving);
+      if (win) win.classList.toggle("sd-moving", moving);
+      if (fl) fl.classList.toggle("sd-flash-on", moving);
       if (off) off.style.display = unavailable ? "flex" : "none";
       if (win) win.style.borderColor = unavailable ? "#B5AC9D" : "#1F1B17";
-      if (!unavailable && !this._dragging) this._setFabric(slot, this._pos(slot));
+      // Render the display position (commanded target while moving) unless the
+      // user is actively dragging this slot's slider.
+      if (!unavailable && !this._dragging) this._setFabric(slot, this._dispPos(slot));
       if (lab) {
-        lab.classList.toggle("sd-moving-label", !!moving);
+        lab.classList.toggle("sd-moving-label", moving); // accent-tint the % while in motion
         if (unavailable) {
           lab.textContent = meta.num != null ? `${meta.num} · —`.replace(/^ · /, "") : "—";
           lab.style.color = "#B0563C";
-        } else if (moving) {
-          const word = st.state === "closing" ? "Closing" : "Opening";
-          lab.textContent = meta.num ? `${meta.num} · ${word}…` : `${word}…`;
         } else {
-          const closed = 100 - this._pos(slot); // display closed %: 100 = closed, 0 = open
+          const closed = 100 - this._dispPos(slot); // closed %: 100 = closed, 0 = open (target while moving)
           const num = meta.num;
           lab.textContent = num ? `${num} · ${closed}%` : `${closed}%`;
-          lab.style.color = "#8A8177";
+          if (!moving) lab.style.color = "#8A8177";
         }
       }
     }
@@ -514,7 +588,7 @@ class ShadeDashboardCard extends HTMLElement {
       const st = this._stateObj(slot);
       if (!st || st.state === "unavailable") { offlineN++; continue; }
       avail++;
-      if (this._pos(slot) > 0) open++;
+      if (this._dispPos(slot) > 0) open++;
     }
     const sEl = root.querySelector("[data-summary]");
     if (sEl) sEl.textContent = `${open} of ${avail} shades open${offlineN ? ` · ${offlineN} offline` : ""}`;
@@ -587,16 +661,19 @@ class ShadeDashboardCard extends HTMLElement {
     const meta = SLOT_META[slot] || {};
     const name = st && st.attributes.friendly_name ? st.attributes.friendly_name : this._entity(slot);
     root.querySelector("[data-bar-name]").textContent = name;
-    const moving = st && (st.state === "opening" || st.state === "closing");
-    root.querySelector("[data-bar-sub]").textContent =
-      moving ? (st.state === "closing" ? "Closing…" : "Opening…") : meta.sub || "";
     const unavailable = !st || st.state === "unavailable";
+    const moving = !unavailable && this._isMoving(slot);
+    const dirWord =
+      st && st.state === "opening" ? "Opening…"
+      : st && st.state === "closing" ? "Closing…"
+      : this._dispPos(slot) >= this._pos(slot) ? "Opening…" : "Closing…";
+    root.querySelector("[data-bar-sub]").textContent = moving ? dirWord : meta.sub || "";
     root.querySelector("[data-bar-ctl]").style.display = unavailable ? "none" : "flex";
     root.querySelector("[data-bar-unavail]").style.display = unavailable ? "block" : "none";
     const pctEl = root.querySelector("[data-bar-pct]");
-    pctEl.classList.toggle("sd-moving-label", !!moving);
+    pctEl.classList.toggle("sd-moving-label", moving);
     if (!unavailable && !this._dragging) {
-      const closed = 100 - this._pos(slot); // slider + readout are closed %
+      const closed = 100 - this._dispPos(slot); // slider + readout are closed % (target while moving)
       root.querySelector("[data-bar-slider]").value = String(closed);
       pctEl.textContent = `${closed}%`;
     }
