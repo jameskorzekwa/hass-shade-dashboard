@@ -91,6 +91,8 @@ DEFAULT_LAYOUT.group_scenes = {
   upstairs: { open: [SP + "open_all_upstairs_shades"], close: [SP + "hallway_close", SP + "office_close"], direct: ["cover.main_bedroom_shades"] },
   all: { open: [SP + "open_all_shades"], close: [SP + "close_all_shades"], direct: ["cover.main_bedroom_shades"] },
 };
+// Entities on the G3 gateway (live-tracked). Everything except the main bedroom.
+DEFAULT_LAYOUT.tracked = Object.entries(DEFAULT_LAYOUT.shades).filter(([s]) => s !== "mbr1").map(([, v]) => v.entity);
 
 // Presentation metadata (label number + control-bar subtitle). Card-side only.
 const SLOT_META = {
@@ -239,6 +241,14 @@ class ShadeDashboardCard extends HTMLElement {
     this._live = {};
     this._liveMoving = new Set();
     this._liveSub = null;
+    // entity_id -> Date.now() when last commanded (flashes a tracked shade for a
+    // moment after a tap, before the gateway confirms motion).
+    this._commanded = {};
+  }
+
+  _tracked(entity) {
+    if (!this._trackedSet) this._trackedSet = new Set(this._layout.tracked || []);
+    return this._trackedSet.has(entity);
   }
 
   setConfig(config) {
@@ -295,25 +305,44 @@ class ShadeDashboardCard extends HTMLElement {
     if (p != null) return Math.round(p);
     return st.state === "open" ? 100 : 0; // no position support -> binary
   }
-  // Display position, best source first:
-  //  1. the REAL live gateway position while the shade is physically moving,
-  //  2. the commanded target while a command is in flight (instant feedback),
-  //  3. HA current_position at rest.
+  // Display position:
+  //  - gateway-tracked shades ALWAYS show the real live gateway position (or HA
+  //    current_position until the first live reading) — never an optimistic jump,
+  //    so the fabric follows the real shade instead of snapping to target & back.
+  //  - untracked shades (main bedroom) use the optimistic target for instant
+  //    feedback, then HA current_position.
   _dispPos(slot) {
     const e = this._entity(slot);
-    if (e && this._liveMoving.has(e) && this._live[e] != null) return this._live[e];
+    if (e && this._tracked(e)) return this._live[e] != null ? this._live[e] : this._pos(slot);
     if (e && this._optimistic[e]) return this._optimistic[e].target;
     return this._pos(slot);
   }
   _isMoving(slot) {
-    const st = this._stateObj(slot);
     const e = this._entity(slot);
-    if (e && this._liveMoving.has(e)) return true; // real gateway motion
+    if (e && this._tracked(e)) {
+      if (this._liveMoving.has(e)) return true; // real gateway motion
+      return Date.now() - (this._commanded[e] || 0) < 5000; // just-tapped, awaiting the gateway
+    }
+    const st = this._stateObj(slot);
     if (st && (st.state === "opening" || st.state === "closing")) return true;
-    return !!(e && this._optimistic[e]);
+    return !!this._optimistic[e];
   }
 
   // Record a commanded target for an entity and (re)arm a safety timeout.
+  // Mark a shade as just-commanded: tracked shades only flash briefly (they show
+  // the real live position, no jump); untracked shades get an optimistic target.
+  _mark(entity, target) {
+    if (!entity) return;
+    this._commanded[entity] = Date.now();
+    if (!this._tracked(entity)) {
+      this._setOptimistic(entity, target);
+      return;
+    }
+    // ensure the just-tapped flash clears even if the shade never actually moves
+    if (!this._cmdTimers) this._cmdTimers = {};
+    clearTimeout(this._cmdTimers[entity]);
+    this._cmdTimers[entity] = setTimeout(() => this._update(), 5200);
+  }
   _setOptimistic(entity, target) {
     if (!entity) return;
     this._optimistic[entity] = { target, moving: false };
@@ -550,7 +579,7 @@ class ShadeDashboardCard extends HTMLElement {
       this._dragging = false;
       if (!this._selected) return;
       const target = 100 - Number(slider.value);
-      this._setOptimistic(this._entity(this._selected), target);
+      this._mark(this._entity(this._selected), target);
       this._callCover("set_cover_position", this._entity(this._selected), { position: target });
       this._update();
     });
@@ -565,7 +594,7 @@ class ShadeDashboardCard extends HTMLElement {
   }
   _commandSelected(service, target) {
     if (!this._selected) return;
-    this._setOptimistic(this._entity(this._selected), target);
+    this._mark(this._entity(this._selected), target);
     this._callCover(service, this._entity(this._selected));
     this._update();
   }
@@ -576,9 +605,9 @@ class ShadeDashboardCard extends HTMLElement {
     });
     if (!entities.length) return;
     const target = dir === "up" ? 100 : 0;
-    // Optimistically target EVERY shade in the group so they all jump + flash at
-    // once, regardless of how the command is delivered.
-    entities.forEach((e) => this._setOptimistic(e, target));
+    // Flash every shade in the group at once (tracked ones follow the live
+    // gateway position; untracked get an optimistic target).
+    entities.forEach((e) => this._mark(e, target));
     const gs = (this._layout.group_scenes || {})[group];
     if (gs && (gs.open || gs.close)) {
       // Prefer in-sync PowerView scenes (a scene moves all its members together).

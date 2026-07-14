@@ -172,6 +172,19 @@ def _resolve_group_scenes() -> dict:
     return out
 
 
+def _tracked_entities() -> list[str]:
+    """Cover entities on the G3 gateway (everything with live tracking) — i.e.
+    every shade whose slot prefix is a gateway room. The main bedroom shade is on
+    a different device and isn't tracked."""
+    prefixes = {p for p in GATEWAY_ROOM_SLOT.values() if p != "lrh1"}
+    out = []
+    for slot, entity in SHADES.items():
+        base = slot.rstrip("0123456789")
+        if slot == "lrh1" or base in prefixes:
+            out.append(entity)
+    return out
+
+
 def build_panel_config() -> dict:
     """Resolve the slot layout into the JSON config handed to the card."""
     shades = {slot: {"entity": entity} for slot, entity in SHADES.items()}
@@ -183,4 +196,5 @@ def build_panel_config() -> dict:
         "scenes": SCENES,
         "sun": SUN,
         "toggles": TOGGLES,
+        "tracked": _tracked_entities(),
     }

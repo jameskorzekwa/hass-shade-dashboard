@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -27,9 +28,13 @@ from .const import GATEWAY_HOST, GATEWAY_ROOM_SLOT, LIVE_EVENT, SHADES
 
 _LOGGER = logging.getLogger(__name__)
 
-IDLE_DELAY = 2.5
+IDLE_DELAY = 2.0
 MOVING_DELAY = 0.4
 ERROR_DELAY = 8.0
+# The gateway updates a shade's position only every ~0.5-1.5s, so a fast poll can
+# briefly see no change mid-travel. Treat a shade as still moving for this long
+# after its last position change so tracking doesn't flap on/off.
+MOVE_HOLD = 2.5
 
 
 def _list(data, *keys):
@@ -53,6 +58,8 @@ class GatewayTracker:
         self._stop = asyncio.Event()
         self._id_to_entity: dict[int, str] = {}
         self._last: dict | None = None
+        self._prev_pos: dict[str, int] = {}
+        self._last_change: dict[str, float] = {}
 
     async def _get(self, path: str):
         async with self._session.get(f"http://{self._host}{path}", timeout=8) as resp:
@@ -105,14 +112,22 @@ class GatewayTracker:
         shades = _list(await self._get("/home/shades"), "shadeData", "shades")
         positions: dict[str, int] = {}
         moving: list[str] = []
+        now = time.monotonic()
         for shade in shades:
             entity = self._id_to_entity.get(shade.get("id"))
             if not entity:
                 continue
             pos = shade.get("positions") or {}
-            positions[entity] = round((pos.get("primary") or 0) * 100)
-            if pos.get("velocity") or shade.get("motion") is not None:
+            value = round((pos.get("primary") or 0) * 100)
+            positions[entity] = value
+            # velocity/motion are unreliable (usually 0/None even mid-travel), so
+            # motion = "position changed within the last MOVE_HOLD seconds".
+            prev = self._prev_pos.get(entity)
+            if prev is not None and prev != value:
+                self._last_change[entity] = now
+            if now - self._last_change.get(entity, 0.0) < MOVE_HOLD:
                 moving.append(entity)
+        self._prev_pos = positions
         payload = {"positions": positions, "moving": sorted(moving)}
         if payload != self._last:
             self.hass.bus.async_fire(LIVE_EVENT, payload)
