@@ -307,6 +307,12 @@ class ShadeDashboardCard extends HTMLElement {
   .main { flex:1; position:relative; padding:20px 22px; display:flex; flex-direction:column; gap:14px; min-width:0; }
   input[type=range]{ accent-color:${ACCENT}; }
   .pill { padding:9px 18px; border-radius:999px; border:1px solid #E2DACB; cursor:pointer; font-weight:600; font-size:13px; }
+  /* Pulsing accent outline while a shade is physically opening/closing. Uses
+     outline (not box-shadow) so it composes with the selection ring. */
+  @keyframes sd-pulse { 0%,100% { outline-color: rgba(198,123,59,.9); } 50% { outline-color: rgba(198,123,59,.12); } }
+  .sd-moving { outline: 2px solid rgba(198,123,59,.9); outline-offset: 2px; border-radius: 3px; animation: sd-pulse 1.05s ease-in-out infinite; }
+  @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  .sd-moving-label { color:${ACCENT} !important; animation: sd-blink 1.05s ease-in-out infinite; }
 </style>
 <div class="frame">
   <div class="rail">
@@ -460,18 +466,24 @@ class ShadeDashboardCard extends HTMLElement {
     for (const slot of Object.keys(this._layout.shades)) {
       const st = this._stateObj(slot);
       const unavailable = !st || st.state === "unavailable";
+      const moving = st && (st.state === "opening" || st.state === "closing");
       const win = root.querySelector(`[data-slot="${slot}"]`);
       const off = root.querySelector(`[data-offline="${slot}"]`);
       const lab = root.querySelector(`[data-label="${slot}"]`);
       const meta = SLOT_META[slot] || {};
       if (win) win.style.boxShadow = this._selected === slot ? RING : "none";
+      if (win) win.classList.toggle("sd-moving", !!moving);
       if (off) off.style.display = unavailable ? "flex" : "none";
       if (win) win.style.borderColor = unavailable ? "#B5AC9D" : "#1F1B17";
       if (!unavailable && !this._dragging) this._setFabric(slot, this._pos(slot));
       if (lab) {
+        lab.classList.toggle("sd-moving-label", !!moving);
         if (unavailable) {
           lab.textContent = meta.num != null ? `${meta.num} · —`.replace(/^ · /, "") : "—";
           lab.style.color = "#B0563C";
+        } else if (moving) {
+          const word = st.state === "closing" ? "Closing" : "Opening";
+          lab.textContent = meta.num ? `${meta.num} · ${word}…` : `${word}…`;
         } else {
           const closed = 100 - this._pos(slot); // display closed %: 100 = closed, 0 = open
           const num = meta.num;
@@ -575,14 +587,18 @@ class ShadeDashboardCard extends HTMLElement {
     const meta = SLOT_META[slot] || {};
     const name = st && st.attributes.friendly_name ? st.attributes.friendly_name : this._entity(slot);
     root.querySelector("[data-bar-name]").textContent = name;
-    root.querySelector("[data-bar-sub]").textContent = meta.sub || "";
+    const moving = st && (st.state === "opening" || st.state === "closing");
+    root.querySelector("[data-bar-sub]").textContent =
+      moving ? (st.state === "closing" ? "Closing…" : "Opening…") : meta.sub || "";
     const unavailable = !st || st.state === "unavailable";
     root.querySelector("[data-bar-ctl]").style.display = unavailable ? "none" : "flex";
     root.querySelector("[data-bar-unavail]").style.display = unavailable ? "block" : "none";
+    const pctEl = root.querySelector("[data-bar-pct]");
+    pctEl.classList.toggle("sd-moving-label", !!moving);
     if (!unavailable && !this._dragging) {
       const closed = 100 - this._pos(slot); // slider + readout are closed %
       root.querySelector("[data-bar-slider]").value = String(closed);
-      root.querySelector("[data-bar-pct]").textContent = `${closed}%`;
+      pctEl.textContent = `${closed}%`;
     }
   }
 }
