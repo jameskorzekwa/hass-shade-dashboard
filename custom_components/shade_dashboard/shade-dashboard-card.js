@@ -394,15 +394,18 @@ class ShadeDashboardCard extends HTMLElement {
     );
     // control bar
     root.querySelector("[data-bar-close]").addEventListener("click", () => { this._selected = null; this._update(); });
+    // The UI shows a CLOSED percentage (0% = open, 100% = closed); HA's
+    // current_position is the inverse (100 = open), so convert on read/write.
     const slider = root.querySelector("[data-bar-slider]");
     slider.addEventListener("input", () => {
       this._dragging = true;
-      root.querySelector("[data-bar-pct]").textContent = `${slider.value}%`;
-      if (this._selected) this._setFabric(this._selected, Number(slider.value));
+      const closed = Number(slider.value);
+      root.querySelector("[data-bar-pct]").textContent = `${closed}%`;
+      if (this._selected) this._setFabric(this._selected, 100 - closed);
     });
     slider.addEventListener("change", () => {
       this._dragging = false;
-      if (this._selected) this._callCover("set_cover_position", this._entity(this._selected), { position: Number(slider.value) });
+      if (this._selected) this._callCover("set_cover_position", this._entity(this._selected), { position: 100 - Number(slider.value) });
     });
     root.querySelector('[data-bar-action="open"]').addEventListener("click", () => {
       if (this._selected) this._callCover("open_cover", this._entity(this._selected));
@@ -470,9 +473,9 @@ class ShadeDashboardCard extends HTMLElement {
           lab.textContent = meta.num != null ? `${meta.num} · —`.replace(/^ · /, "") : "—";
           lab.style.color = "#B0563C";
         } else {
-          const p = this._pos(slot);
+          const closed = 100 - this._pos(slot); // display closed %: 100 = closed, 0 = open
           const num = meta.num;
-          lab.textContent = num ? `${num} · ${p}%` : `${p}%`;
+          lab.textContent = num ? `${num} · ${closed}%` : `${closed}%`;
           lab.style.color = "#8A8177";
         }
       }
@@ -577,9 +580,9 @@ class ShadeDashboardCard extends HTMLElement {
     root.querySelector("[data-bar-ctl]").style.display = unavailable ? "none" : "flex";
     root.querySelector("[data-bar-unavail]").style.display = unavailable ? "block" : "none";
     if (!unavailable && !this._dragging) {
-      const p = this._pos(slot);
-      root.querySelector("[data-bar-slider]").value = String(p);
-      root.querySelector("[data-bar-pct]").textContent = `${p}%`;
+      const closed = 100 - this._pos(slot); // slider + readout are closed %
+      root.querySelector("[data-bar-slider]").value = String(closed);
+      root.querySelector("[data-bar-pct]").textContent = `${closed}%`;
     }
   }
 }
