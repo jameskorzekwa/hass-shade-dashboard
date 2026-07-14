@@ -116,12 +116,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await tracker.start()
 
     if not hass.services.has_service(DOMAIN, SERVICE_MOVE_GROUP):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_MOVE_GROUP,
-            lambda call: _async_move_group(hass, call),
-            schema=MOVE_GROUP_SCHEMA,
-        )
+
+        async def _handle_move_group(call: ServiceCall) -> None:
+            # Must be a real coroutine FUNCTION so HA awaits it (a lambda that
+            # merely returns the coroutine is never awaited -> silent no-op).
+            await _async_move_group(hass, call)
+
+        hass.services.async_register(DOMAIN, SERVICE_MOVE_GROUP, _handle_move_group, schema=MOVE_GROUP_SCHEMA)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
