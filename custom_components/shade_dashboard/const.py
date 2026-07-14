@@ -46,6 +46,8 @@ SHADES: dict[str, str] = {
     # Kyle's office 1-2
     "ko1": "cover.kyle_s_office_shade_1",
     "ko2": "cover.kyle_s_office_shade_2",
+    # Main bedroom sliding-door shade (horizontal travel: left=open, right=closed)
+    "mbr1": "cover.main_bedroom_shades",
 }
 
 # --- Groups (chip ▲▼, floor open/close, scenes) --------------------------
@@ -57,11 +59,12 @@ _GROUP_SLOTS: dict[str, list[str]] = {
     "hallway": ["lrh1"],
     "upstairs_hallway": ["uh1", "uh2", "uh3"],
     "office": ["ko1", "ko2"],
+    "main_bedroom": ["mbr1"],
 }
 _GROUP_SLOTS["main_floor"] = (
     _GROUP_SLOTS["south"] + _GROUP_SLOTS["west"] + _GROUP_SLOTS["north"] + _GROUP_SLOTS["hallway"]
 )
-_GROUP_SLOTS["upstairs"] = _GROUP_SLOTS["upstairs_hallway"] + _GROUP_SLOTS["office"]
+_GROUP_SLOTS["upstairs"] = _GROUP_SLOTS["main_bedroom"] + _GROUP_SLOTS["upstairs_hallway"] + _GROUP_SLOTS["office"]
 _GROUP_SLOTS["all"] = _GROUP_SLOTS["main_floor"] + _GROUP_SLOTS["upstairs"]
 
 # --- Scenes ------------------------------------------------------------------
