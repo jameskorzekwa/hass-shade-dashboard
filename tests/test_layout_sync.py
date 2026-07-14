@@ -14,6 +14,7 @@ from custom_components.shade_dashboard.const import (
     SCENES,
     SHADES,
     TOGGLES,
+    abstract_entity,
     build_panel_config,
 )
 
@@ -36,7 +37,11 @@ def test_all_shades_present() -> None:
 
 
 def test_js_shade_map_matches_const() -> None:
-    assert _parse_js_shades() == SHADES
+    # The card talks to the unified abstraction covers (cover.shade_<slot>), and
+    # its DEFAULT_LAYOUT must mirror what build_panel_config hands the panel.
+    expected = {slot: abstract_entity(slot) for slot in SHADES}
+    assert _parse_js_shades() == expected
+    assert {slot: cfg["entity"] for slot, cfg in build_panel_config()["shades"].items()} == expected
 
 
 def test_offline_shade_is_lower_2() -> None:
@@ -86,8 +91,9 @@ def test_group_scenes() -> None:
         "scene.living_room_gateway_west_upper_open",
         "scene.living_room_gateway_west_lower_open",
     ]
-    # upstairs close avoids the uh2-missing scene; bedroom handled directly
-    assert gs["upstairs"]["direct"] == ["cover.main_bedroom_shades"]
+    # upstairs close avoids the uh2-missing scene; bedroom handled directly via
+    # its abstraction cover
+    assert gs["upstairs"]["direct"] == ["cover.shade_mbr1"]
     assert gs["all"]["open"] == ["scene.living_room_gateway_open_all_shades"]
     assert "west_upper_open" in CARD_JS.read_text()
 
@@ -97,8 +103,8 @@ def test_groups_resolve_to_entities() -> None:
     assert len(cfg["groups"]["main_floor"]) == 16
     assert len(cfg["groups"]["upstairs"]) == 6
     assert len(cfg["groups"]["all"]) == 22
-    assert cfg["groups"]["main_bedroom"] == ["cover.main_bedroom_shades"]
-    # every group entity is a real mapped cover
-    mapped = set(SHADES.values())
+    assert cfg["groups"]["main_bedroom"] == ["cover.shade_mbr1"]
+    # every group entity is one of the integration's abstraction covers
+    mapped = {abstract_entity(slot) for slot in SHADES}
     for entities in cfg["groups"].values():
         assert set(entities) <= mapped

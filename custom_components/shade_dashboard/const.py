@@ -185,14 +185,42 @@ def _tracked_entities() -> list[str]:
     return out
 
 
+# --- Unified abstraction covers ---------------------------------------------
+# The integration owns one cover.shade_<slot> per shade (see cover.py). It
+# presents a consistent interface and routes to the real device behind it — the
+# card talks only to these, so it doesn't care whether a shade is Hunter Douglas
+# (PowerView gateway) or RYSE (HomeKit). SHADES stays the real-device map (the
+# adapter target); ABSTRACT_PREFIX + abstract_entity() derive the front entity.
+ABSTRACT_PREFIX = "cover.shade_"
+_SOURCE_TO_SLOT = {entity: slot for slot, entity in SHADES.items()}
+
+
+def abstract_entity(slot: str) -> str:
+    """The integration-owned unified cover for a slot (front interface)."""
+    return f"{ABSTRACT_PREFIX}{slot}"
+
+
+def _to_abstract(entity: str) -> str:
+    """Map a real source cover to its abstract cover (pass others through)."""
+    slot = _SOURCE_TO_SLOT.get(entity)
+    return abstract_entity(slot) if slot else entity
+
+
 def build_panel_config() -> dict:
-    """Resolve the slot layout into the JSON config handed to the card."""
-    shades = {slot: {"entity": entity} for slot, entity in SHADES.items()}
-    groups = {name: [SHADES[slot] for slot in slots] for name, slots in _GROUP_SLOTS.items()}
+    """Resolve the slot layout into the JSON config handed to the card.
+
+    Everything the card commands/reads is the abstract cover; the underlying
+    PowerView scenes (fired for in-sync bulk moves) stay as real scene entities.
+    """
+    shades = {slot: {"entity": abstract_entity(slot)} for slot in SHADES}
+    groups = {name: [abstract_entity(slot) for slot in slots] for name, slots in _GROUP_SLOTS.items()}
+    group_scenes = _resolve_group_scenes()
+    for spec in group_scenes.values():
+        spec["direct"] = [_to_abstract(e) for e in spec.get("direct", [])]
     return {
         "shades": shades,
         "groups": groups,
-        "group_scenes": _resolve_group_scenes(),
+        "group_scenes": group_scenes,
         "scenes": SCENES,
         "sun": SUN,
         "toggles": TOGGLES,
