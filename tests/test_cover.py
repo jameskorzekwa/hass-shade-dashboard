@@ -78,6 +78,33 @@ async def test_untracked_cover_mirrors_source(hass: HomeAssistant) -> None:
     assert hass.states.get(ent).attributes["current_position"] == 0
 
 
+async def test_meta_resolves_when_source_appears_late(hass: HomeAssistant) -> None:
+    """Name + features are picked up even if the source loads after us."""
+    # set up with the RYSE source ABSENT (its HomeKit bridge loads late)
+    for source in SHADES.values():
+        if source != SHADES["mbr1"]:
+            hass.states.async_set(source, "open", {"current_position": 100})
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    ent = abstract_entity("mbr1")
+    # not yet resolved: no name, full feature default
+    assert hass.states.get(ent).attributes.get("friendly_name") is None
+
+    # source appears (supported_features 7 = OPEN|CLOSE|SET_POSITION, no STOP)
+    hass.states.async_set(
+        SHADES["mbr1"],
+        "open",
+        {"current_position": 100, "friendly_name": "Main Bedroom Shades", "supported_features": 7},
+    )
+    await hass.async_block_till_done()
+    st = hass.states.get(ent)
+    assert st.attributes["friendly_name"] == "Main Bedroom Shades"
+    assert st.attributes["supported_features"] == 7  # STOP masked out
+
+
 async def test_command_routes_to_source() -> None:
     """Commanding the abstraction routes a cover service to the real device."""
     source = _tracked_entities()[0]

@@ -81,6 +81,7 @@ class ShadeCover(CoverEntity):
         self.entity_id = f"cover.shade_{slot}"
         self._attr_unique_id = f"{DOMAIN}_shade_{slot}"
         self._attr_name = None  # resolved from the source's friendly name on add
+        self._meta_resolved = False
         # Live-tracking state (PowerView shades only).
         self._live: int | None = None
         self._prev_live: int | None = None
@@ -88,24 +89,37 @@ class ShadeCover(CoverEntity):
         self._hold: int | None = None  # pre-command hold until the gateway confirms motion
 
     async def async_added_to_hass(self) -> None:
-        """Resolve the name, then follow the source cover + live events."""
-        st = self.hass.states.get(self._source)
-        if st is not None:
-            friendly = st.attributes.get("friendly_name")
-            self._attr_name = friendly if friendly else self.entity_id
-            # Advertise only what the real device actually supports, masked to
-            # the features this abstraction implements.
-            src_features = st.attributes.get("supported_features")
-            if src_features is not None:
-                self._attr_supported_features = self._SUPPORTED & CoverEntityFeature(int(src_features))
+        """Resolve name/features, then follow the source cover + live events."""
+        self._resolve_meta()
         self.async_on_remove(async_track_state_change_event(self.hass, [self._source], self._source_changed))
         if self._tracked:
             self.async_on_remove(self.hass.bus.async_listen(LIVE_EVENT, self._live_event))
+
+    def _resolve_meta(self) -> bool:
+        """Copy name + supported features from the source once it's available.
+
+        The source may load after us (e.g. the RYSE shade's HomeKit bridge), so
+        we resolve lazily and re-try from _source_changed until it lands.
+        """
+        st = self.hass.states.get(self._source)
+        if st is None:
+            return False
+        friendly = st.attributes.get("friendly_name")
+        self._attr_name = friendly if friendly else self.entity_id
+        # Advertise only what the real device actually supports, masked to the
+        # features this abstraction implements.
+        src_features = st.attributes.get("supported_features")
+        if src_features is not None:
+            self._attr_supported_features = self._SUPPORTED & CoverEntityFeature(int(src_features))
+        self._meta_resolved = True
+        return True
 
     # --- following the underlying device -------------------------------------
     @callback
     def _source_changed(self, event: Event) -> None:
         """The real cover changed (availability, and position for untracked)."""
+        if not self._meta_resolved:
+            self._resolve_meta()
         self.async_write_ha_state()
 
     @callback
