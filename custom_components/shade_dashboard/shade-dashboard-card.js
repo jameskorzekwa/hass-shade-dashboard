@@ -244,6 +244,10 @@ class ShadeDashboardCard extends HTMLElement {
     // entity_id -> Date.now() when last commanded (flashes a tracked shade for a
     // moment after a tap, before the gateway confirms motion).
     this._commanded = {};
+    // entity_id -> position to HOLD after a command until the gateway reports real
+    // motion. A tracked shade must NOT jump to the target (HA sets current_position
+    // optimistically); it stays put + flashes, then follows the live position.
+    this._holdPos = {};
   }
 
   _tracked(entity) {
@@ -313,7 +317,14 @@ class ShadeDashboardCard extends HTMLElement {
   //    feedback, then HA current_position.
   _dispPos(slot) {
     const e = this._entity(slot);
-    if (e && this._tracked(e)) return this._live[e] != null ? this._live[e] : this._pos(slot);
+    if (e && this._tracked(e)) {
+      // 1. while physically moving: the REAL live gateway position
+      if (this._liveMoving.has(e) && this._live[e] != null) return this._live[e];
+      // 2. just commanded, not yet moving: HOLD (don't jump to HA's optimistic target)
+      if (this._holdPos[e] != null) return this._holdPos[e];
+      // 3. at rest: HA current_position (calibrated 0=closed..100=open)
+      return this._pos(slot);
+    }
     if (e && this._optimistic[e]) return this._optimistic[e].target;
     return this._pos(slot);
   }
@@ -321,7 +332,7 @@ class ShadeDashboardCard extends HTMLElement {
     const e = this._entity(slot);
     if (e && this._tracked(e)) {
       if (this._liveMoving.has(e)) return true; // real gateway motion
-      return Date.now() - (this._commanded[e] || 0) < 5000; // just-tapped, awaiting the gateway
+      return Date.now() - (this._commanded[e] || 0) < 12000; // commanded, awaiting the gateway
     }
     const st = this._stateObj(slot);
     if (st && (st.state === "opening" || st.state === "closing")) return true;
@@ -338,10 +349,19 @@ class ShadeDashboardCard extends HTMLElement {
       this._setOptimistic(entity, target);
       return;
     }
-    // ensure the just-tapped flash clears even if the shade never actually moves
+    // Capture the real position NOW (before HA optimistically snaps
+    // current_position to the target) so we can hold it until the gateway
+    // reports the shade actually moving.
+    const st = this._hass && this._hass.states[entity];
+    const cur = st && st.attributes.current_position;
+    this._holdPos[entity] = this._live[entity] != null ? this._live[entity] : cur != null ? Math.round(cur) : null;
+    // clear the hold if no motion is ever detected (e.g. a no-op command)
     if (!this._cmdTimers) this._cmdTimers = {};
     clearTimeout(this._cmdTimers[entity]);
-    this._cmdTimers[entity] = setTimeout(() => this._update(), 5200);
+    this._cmdTimers[entity] = setTimeout(() => {
+      delete this._holdPos[entity];
+      this._update();
+    }, 12000);
   }
   _setOptimistic(entity, target) {
     if (!entity) return;
@@ -372,6 +392,23 @@ class ShadeDashboardCard extends HTMLElement {
       const cur = st.attributes.current_position;
       const reached = cur == null || Math.abs(cur - this._optimistic[e].target) <= 2;
       if (this._optimistic[e].moving || reached) this._clearOptimistic(e);
+    }
+  }
+
+  // Drop a tracked shade's command-hold once it has actually moved and stopped,
+  // so the display returns to HA's (calibrated, settled) current_position.
+  _reconcileTracked() {
+    if (!this._movedOnce) this._movedOnce = new Set();
+    for (const e of Object.keys(this._holdPos)) {
+      if (this._liveMoving.has(e)) {
+        this._movedOnce.add(e); // motion confirmed
+        if (this._cmdTimers) clearTimeout(this._cmdTimers[e]);
+      } else if (this._movedOnce.has(e)) {
+        delete this._holdPos[e];
+        delete this._commanded[e];
+        this._movedOnce.delete(e);
+        if (this._cmdTimers) clearTimeout(this._cmdTimers[e]);
+      }
     }
   }
 
@@ -667,6 +704,7 @@ class ShadeDashboardCard extends HTMLElement {
     if (!this._built || !this._hass) return;
     const root = this.shadowRoot;
     this._reconcileOptimistic();
+    this._reconcileTracked();
 
     // per-shade: fabric, label, offline, ring, in-motion flash
     for (const slot of Object.keys(this._layout.shades)) {
