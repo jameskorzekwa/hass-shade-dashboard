@@ -395,15 +395,21 @@ class ShadeDashboardCard extends HTMLElement {
     }
   }
 
-  // Drop a tracked shade's command-hold once it has actually moved and stopped,
-  // so the display returns to HA's (calibrated, settled) current_position.
+  // Drop a tracked shade's command-hold once it has actually TRAVELLED and
+  // stopped, so the display returns to HA's (calibrated, settled) position.
+  // "Travelled" requires the live position to move meaningfully from where it
+  // started — a brief gateway position blip when the command is issued (the
+  // shades twitch before physically starting) must NOT count as motion, or the
+  // hold/flash would clear during the gap before the real move begins.
   _reconcileTracked() {
     if (!this._movedOnce) this._movedOnce = new Set();
     for (const e of Object.keys(this._holdPos)) {
-      if (this._liveMoving.has(e)) {
-        this._movedOnce.add(e); // motion confirmed
+      const live = this._live[e];
+      const travelled = live != null && Math.abs(live - this._holdPos[e]) > 3;
+      if (this._liveMoving.has(e) && travelled) {
+        this._movedOnce.add(e); // genuinely en route (not a startup blip)
         if (this._cmdTimers) clearTimeout(this._cmdTimers[e]);
-      } else if (this._movedOnce.has(e)) {
+      } else if (this._movedOnce.has(e) && !this._liveMoving.has(e)) {
         delete this._holdPos[e];
         delete this._commanded[e];
         this._movedOnce.delete(e);
