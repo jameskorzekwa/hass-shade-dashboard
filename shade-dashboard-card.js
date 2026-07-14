@@ -61,10 +61,9 @@ const DEFAULT_LAYOUT = {
     main_bedroom: ["cover.main_bedroom_shades"],
   },
   scenes: {
-    movie: { title: "Movie Mode", desc: "Close everything", script: "script.movie_mode" },
-    sunset: { title: "Sunset Mode", desc: "View open, uppers cut glare", script: null },
-    open_all: { title: "Open All", desc: "Every shade up", script: null },
-    close_all: { title: "Close All", desc: "Every shade down", script: null },
+    movie: { title: "Movie Mode", desc: "Close everything", kind: "script", script: "script.movie_mode" },
+    open_all: { title: "Open All", desc: "Every shade up", kind: "group", group: "all", dir: "up" },
+    close_all: { title: "Close All", desc: "Every shade down", kind: "group", group: "all", dir: "down" },
   },
   sun: {
     elevation_entity: "sensor.home2_sun_elevation",
@@ -72,10 +71,27 @@ const DEFAULT_LAYOUT = {
     west_lux: "sensor.west_light_level",
     south_lux: "sensor.south_light_level",
   },
+  automation: {
+    entity: "input_boolean.shade_automation",
+    enable_script: "script.enable_shade_automation",
+    disable_script: "script.disable_shade_automation",
+  },
 };
 DEFAULT_LAYOUT.groups.main_floor = [...DEFAULT_LAYOUT.groups.south, ...DEFAULT_LAYOUT.groups.west, ...DEFAULT_LAYOUT.groups.north, ...DEFAULT_LAYOUT.groups.hallway];
 DEFAULT_LAYOUT.groups.upstairs = [...DEFAULT_LAYOUT.groups.main_bedroom, ...DEFAULT_LAYOUT.groups.upstairs_hallway, ...DEFAULT_LAYOUT.groups.office];
 DEFAULT_LAYOUT.groups.all = [...DEFAULT_LAYOUT.groups.main_floor, ...DEFAULT_LAYOUT.groups.upstairs];
+const SP = "scene.living_room_gateway_";
+DEFAULT_LAYOUT.group_scenes = {
+  south: { open: [SP + "south_open"], close: [SP + "south_close"], direct: [] },
+  west: { open: [SP + "west_upper_open", SP + "west_lower_open"], close: [SP + "west_upper_close", SP + "west_lower_close"], direct: [] },
+  north: { open: [SP + "north_open"], close: [SP + "north_close"], direct: [] },
+  hallway: { open: [SP + "downstairs_hall_open"], close: [SP + "downstairs_hall_close"], direct: [] },
+  upstairs_hallway: { open: [SP + "hallway_open"], close: [SP + "hallway_close"], direct: [] },
+  office: { open: [SP + "office_open"], close: [SP + "office_close"], direct: [] },
+  main_floor: { open: [SP + "open_living_room", SP + "downstairs_hall_open"], close: [SP + "close_living_room", SP + "downstairs_hall_close"], direct: [] },
+  upstairs: { open: [SP + "open_all_upstairs_shades"], close: [SP + "hallway_close", SP + "office_close"], direct: ["cover.main_bedroom_shades"] },
+  all: { open: [SP + "open_all_shades"], close: [SP + "close_all_shades"], direct: ["cover.main_bedroom_shades"] },
+};
 
 // Presentation metadata (label number + control-bar subtitle). Card-side only.
 const SLOT_META = {
@@ -391,9 +407,13 @@ class ShadeDashboardCard extends HTMLElement {
     </div>
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">SCENES</div>
     ${sceneBtn("movie", sc.movie)}
-    ${sceneBtn("sunset", sc.sunset)}
     ${sceneBtn("open_all", sc.open_all)}
     ${sceneBtn("close_all", sc.close_all)}
+    <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">AUTOMATION</div>
+    <button data-auto-toggle style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1px solid #E2DACB;border-radius:12px;background:#FFFDF9;cursor:pointer">
+      <span style="display:flex;flex-direction:column;gap:3px;text-align:left"><span style="font-weight:600;font-size:14px;color:#26211B">Auto shades</span><span data-auto-desc style="font-size:11px;color:#8A8177">Sun &amp; sunset automation</span></span>
+      <span data-auto-switch style="flex-shrink:0;width:40px;height:23px;border-radius:999px;background:#D9D2C4;position:relative;transition:background .2s"><span data-auto-knob style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#FFF;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></span>
+    </button>
     <div style="flex:1"></div>
     <div data-summary style="font-size:11px;color:#8A8177"></div>
   </div>
@@ -458,6 +478,8 @@ class ShadeDashboardCard extends HTMLElement {
     root.querySelectorAll("[data-scene]").forEach((el) =>
       el.addEventListener("click", () => this._scene(el.getAttribute("data-scene")))
     );
+    const autoBtn = root.querySelector("[data-auto-toggle]");
+    if (autoBtn) autoBtn.addEventListener("click", () => this._toggleAutomation());
     // control bar
     root.querySelector("[data-bar-close]").addEventListener("click", () => { this._selected = null; this._update(); });
     // The UI shows a CLOSED percentage (0% = open, 100% = closed); HA's
@@ -500,21 +522,42 @@ class ShadeDashboardCard extends HTMLElement {
     if (!entities.length) return;
     const target = dir === "up" ? 100 : 0;
     // Optimistically target EVERY shade in the group so they all jump + flash at
-    // once (one service call fires them together; the gateway may still move them
-    // sequentially, but the dashboard shows the whole group in motion).
+    // once, regardless of how the command is delivered.
     entities.forEach((e) => this._setOptimistic(e, target));
-    this._callCover(dir === "up" ? "open_cover" : "close_cover", entities);
+    const gs = (this._layout.group_scenes || {})[group];
+    if (gs && (gs.open || gs.close)) {
+      // Prefer in-sync PowerView scenes (a scene moves all its members together).
+      const scenes = (dir === "up" ? gs.open : gs.close) || [];
+      if (scenes.length) this._hass.callService("scene", "turn_on", { entity_id: scenes });
+      // Shades not covered by a gateway scene (e.g. the main bedroom).
+      const direct = (gs.direct || []).filter((e) => entities.includes(e));
+      if (direct.length) this._callCover(dir === "up" ? "open_cover" : "close_cover", direct);
+    } else {
+      // No scene for this group -> plain cover services.
+      this._callCover(dir === "up" ? "open_cover" : "close_cover", entities);
+    }
     this._update();
   }
   _scene(key) {
     const s = this._layout.scenes[key];
-    if (s && s.script) {
+    if (!s) return;
+    if (s.kind === "group") {
+      this._lastScene = key;
+      this._group(s.group, s.dir);
+      return;
+    }
+    if (s.script) {
       this._hass.callService("script", "turn_on", { entity_id: s.script });
       this._lastScene = key;
       this._update();
-    } else {
-      fireEvent(this, "hass-notification", { message: `"${s ? s.title : key}" isn't set up yet — create its HA script, then wire it in const.py.` });
     }
+  }
+  _toggleAutomation() {
+    const a = this._layout.automation;
+    if (!a || !this._hass) return;
+    const on = this._hass.states[a.entity] && this._hass.states[a.entity].state === "on";
+    const script = on ? a.disable_script : a.enable_script;
+    this._hass.callService("script", "turn_on", { entity_id: script });
   }
   _select(slot) {
     this._selected = this._selected === slot ? null : slot;
@@ -580,6 +623,18 @@ class ShadeDashboardCard extends HTMLElement {
     root.querySelectorAll("[data-scene]").forEach((el) => {
       el.style.background = this._lastScene === el.getAttribute("data-scene") ? SCENE_ACTIVE_BG : "#FFFDF9";
     });
+
+    // automation toggle state
+    const a = this._layout.automation;
+    const sw = root.querySelector("[data-auto-switch]");
+    if (a && sw) {
+      const st = this._hass.states[a.entity];
+      const on = st && st.state === "on";
+      sw.style.background = on ? ACCENT : "#D9D2C4";
+      root.querySelector("[data-auto-knob]").style.left = on ? "19px" : "2px";
+      const desc = root.querySelector("[data-auto-desc]");
+      if (desc) desc.textContent = on ? "On · sun & sunset control" : "Off · manual only";
+    }
 
     // summary
     const slots = Object.keys(this._layout.shades);

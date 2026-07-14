@@ -67,15 +67,55 @@ _GROUP_SLOTS["main_floor"] = (
 _GROUP_SLOTS["upstairs"] = _GROUP_SLOTS["main_bedroom"] + _GROUP_SLOTS["upstairs_hallway"] + _GROUP_SLOTS["office"]
 _GROUP_SLOTS["all"] = _GROUP_SLOTS["main_floor"] + _GROUP_SLOTS["upstairs"]
 
-# --- Scenes ------------------------------------------------------------------
-# Only Movie Mode is wired for now (per owner). ``script`` is the entity fired
-# on click; ``None`` renders the button as a not-yet-configured placeholder.
-# Fill these in as the corresponding HA scripts are created.
+# --- Left-rail scene buttons -------------------------------------------------
+# Movie Mode fires a script; Open All / Close All route to the "all" group (which
+# fires the whole-house PowerView scene). ``kind`` tells the card how to act.
 SCENES: dict[str, dict] = {
-    "movie": {"title": "Movie Mode", "desc": "Close everything", "script": "script.movie_mode"},
-    "sunset": {"title": "Sunset Mode", "desc": "View open, uppers cut glare", "script": None},
-    "open_all": {"title": "Open All", "desc": "Every shade up", "script": None},
-    "close_all": {"title": "Close All", "desc": "Every shade down", "script": None},
+    "movie": {"title": "Movie Mode", "desc": "Close everything", "kind": "script", "script": "script.movie_mode"},
+    "open_all": {"title": "Open All", "desc": "Every shade up", "kind": "group", "group": "all", "dir": "up"},
+    "close_all": {"title": "Close All", "desc": "Every shade down", "kind": "group", "group": "all", "dir": "down"},
+}
+
+# --- Group -> PowerView scenes ----------------------------------------------
+# Bulk/group open+close fire in-sync gateway scenes (a scene moves all its member
+# shades together; cover.open_cover on a list can serialize). Composed from the
+# owner's CLEAN sub-scenes (avoids the polluted "West" and the uh2-missing
+# "Close All Upstairs"). ``direct`` lists entities NOT on the gateway (the main
+# bedroom) that the card must move with cover services alongside the scene.
+# Values are scene object_ids under scene.living_room_gateway_*.
+_SCENE_PREFIX = "scene.living_room_gateway_"
+_GROUP_SCENES: dict[str, dict] = {
+    "south": {"open": ["south_open"], "close": ["south_close"]},
+    "west": {"open": ["west_upper_open", "west_lower_open"], "close": ["west_upper_close", "west_lower_close"]},
+    "north": {"open": ["north_open"], "close": ["north_close"]},
+    "hallway": {"open": ["downstairs_hall_open"], "close": ["downstairs_hall_close"]},
+    "upstairs_hallway": {"open": ["hallway_open"], "close": ["hallway_close"]},
+    "office": {"open": ["office_open"], "close": ["office_close"]},
+    "main_floor": {
+        "open": ["open_living_room", "downstairs_hall_open"],
+        "close": ["close_living_room", "downstairs_hall_close"],
+    },
+    "upstairs": {
+        "open": ["open_all_upstairs_shades"],
+        "close": ["hallway_close", "office_close"],
+        "direct": ["cover.main_bedroom_shades"],
+    },
+    "all": {
+        "open": ["open_all_shades"],
+        "close": ["close_all_shades"],
+        "direct": ["cover.main_bedroom_shades"],
+    },
+    # main_bedroom has no gateway scene -> the card uses cover services.
+}
+
+# --- Shade-automation master toggle (single source of truth) -----------------
+# input_boolean.shade_automation gates all 7 HA shade automations. The card
+# reflects its state and flips it via the enable/disable scripts (enable also
+# resets the glare debounce timers).
+AUTOMATION: dict[str, str] = {
+    "entity": "input_boolean.shade_automation",
+    "enable_script": "script.enable_shade_automation",
+    "disable_script": "script.disable_shade_automation",
 }
 
 # --- Sun widget sources ------------------------------------------------------
@@ -91,8 +131,27 @@ SUN: dict[str, str] = {
 }
 
 
+def _resolve_group_scenes() -> dict:
+    """Expand scene object_ids to full scene.* entity IDs."""
+    out: dict[str, dict] = {}
+    for group, spec in _GROUP_SCENES.items():
+        out[group] = {
+            "open": [_SCENE_PREFIX + s for s in spec.get("open", [])],
+            "close": [_SCENE_PREFIX + s for s in spec.get("close", [])],
+            "direct": list(spec.get("direct", [])),
+        }
+    return out
+
+
 def build_panel_config() -> dict:
     """Resolve the slot layout into the JSON config handed to the card."""
     shades = {slot: {"entity": entity} for slot, entity in SHADES.items()}
     groups = {name: [SHADES[slot] for slot in slots] for name, slots in _GROUP_SLOTS.items()}
-    return {"shades": shades, "groups": groups, "scenes": SCENES, "sun": SUN}
+    return {
+        "shades": shades,
+        "groups": groups,
+        "group_scenes": _resolve_group_scenes(),
+        "scenes": SCENES,
+        "sun": SUN,
+        "automation": AUTOMATION,
+    }

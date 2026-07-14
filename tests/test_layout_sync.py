@@ -10,7 +10,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from custom_components.shade_dashboard.const import SCENES, SHADES, build_panel_config
+from custom_components.shade_dashboard.const import (
+    AUTOMATION,
+    SCENES,
+    SHADES,
+    build_panel_config,
+)
 
 CARD_JS = Path(__file__).resolve().parent.parent / "custom_components" / "shade_dashboard" / "shade-dashboard-card.js"
 
@@ -39,12 +44,32 @@ def test_offline_shade_is_lower_2() -> None:
     assert SHADES["l2"] == "cover.living_room_lower_shade_2"
 
 
-def test_movie_scene_wired_others_placeholder() -> None:
+def test_scene_buttons_wired() -> None:
     assert SCENES["movie"]["script"] == "script.movie_mode"
-    for key in ("sunset", "open_all", "close_all"):
-        assert SCENES[key]["script"] is None
-    # and the card file references the movie script it will call
+    # Open/Close All route to the whole-house group (fires the gateway scene)
+    assert SCENES["open_all"]["kind"] == "group" and SCENES["open_all"]["group"] == "all"
+    assert SCENES["close_all"]["kind"] == "group" and SCENES["close_all"]["dir"] == "down"
+    assert "sunset" not in SCENES  # Sunset Mode dropped
     assert "script.movie_mode" in CARD_JS.read_text()
+
+
+def test_group_scenes_and_automation() -> None:
+    cfg = build_panel_config()
+    gs = cfg["group_scenes"]
+    # west composes the clean upper+lower sub-scenes (avoids the polluted "West")
+    assert gs["west"]["open"] == [
+        "scene.living_room_gateway_west_upper_open",
+        "scene.living_room_gateway_west_lower_open",
+    ]
+    # upstairs close avoids the uh2-missing scene; bedroom handled directly
+    assert gs["upstairs"]["direct"] == ["cover.main_bedroom_shades"]
+    assert gs["all"]["open"] == ["scene.living_room_gateway_open_all_shades"]
+    assert cfg["automation"]["entity"] == "input_boolean.shade_automation"
+    assert AUTOMATION["enable_script"] == "script.enable_shade_automation"
+    # card mirror references the automation boolean + a composed west scene
+    text = CARD_JS.read_text()
+    assert "input_boolean.shade_automation" in text
+    assert "west_upper_open" in text
 
 
 def test_groups_resolve_to_entities() -> None:
