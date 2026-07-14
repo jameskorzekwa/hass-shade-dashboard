@@ -111,6 +111,7 @@ async def test_command_routes_to_source() -> None:
     slot = next(s for s, e in SHADES.items() if e == source)
     cover = ShadeCover(slot, source, tracked=True)
     cover.hass = MagicMock()
+    cover.hass.data = {}  # no tracker -> not calibrating
     cover.hass.services.async_call = AsyncMock()
     cover._live = 50  # have a live reading, so no pre-command hold/state write
 

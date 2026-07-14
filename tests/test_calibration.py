@@ -127,6 +127,54 @@ async def test_auto_recal_kill_switch_off_notifies_only() -> None:
     t.hass.services.async_call.assert_awaited()  # but DID notify
 
 
+async def test_recalibrate_locks_then_blocks_reentry() -> None:
+    """A shade is locked mid-calibration and a second recalibrate is ignored."""
+    t = _tracker()
+    t._entity_to_ble = {"cover.x": "DUE:A6C5"}
+    post = _mock_post(t, {"err": 0})
+    t.hass = MagicMock()
+
+    assert await t.async_recalibrate("cover.x") is True
+    assert t.is_calibrating("cover.x") is True
+    # a second call while locked does nothing (no extra POST)
+    assert await t.async_recalibrate("cover.x") is False
+    assert post.call_count == 1
+
+
+async def test_recalibrate_unlocks_on_gateway_rejection() -> None:
+    """If the gateway rejects the frame, the shade is not left locked."""
+    t = _tracker()
+    t._entity_to_ble = {"cover.x": "DUE:A6C5"}
+    _mock_post(t, {"err": 4, "errMsg": "nope"})
+    t.hass = MagicMock()
+    assert await t.async_recalibrate("cover.x") is False
+    assert t.is_calibrating("cover.x") is False
+
+
+async def test_cover_blocks_commands_while_calibrating() -> None:
+    """Open/close/set/stop are refused (routed nowhere) during calibration."""
+    cover = ShadeCover("ko1", "cover.kyle_s_office_shade_1", tracked=True)
+    tracker = MagicMock()
+    tracker.is_calibrating.return_value = True
+    cover.hass = MagicMock()
+    cover.hass.data = {TRACKER_KEY: tracker}
+    cover.hass.services.async_call = AsyncMock()
+    cover._live = 50  # skip the pre-command hold path
+
+    await cover.async_open_cover()
+    await cover.async_close_cover()
+    await cover.async_set_cover_position(position=30)
+    await cover.async_stop_cover()
+
+    cover.hass.services.async_call.assert_not_awaited()  # nothing routed to the real device
+    assert cover.extra_state_attributes["calibrating"] is True
+
+    # once the lock clears, a command goes through
+    tracker.is_calibrating.return_value = False
+    await cover.async_close_cover()
+    cover.hass.services.async_call.assert_awaited()
+
+
 @pytest.mark.parametrize("tracked", [True, False])
 async def test_cover_recalibrate_service(tracked: bool) -> None:
     """The cover service delegates to the tracker only for PowerView shades."""

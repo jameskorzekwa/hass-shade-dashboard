@@ -43,6 +43,9 @@ TRACKER_KEY = f"{DOMAIN}_tracker"
 CALIBRATE_HEX = "F7D40303000001"
 # Fired when calibration drift is detected (and auto-recalibrated).
 CALIBRATE_EVENT = "shade_dashboard_calibration"
+# Fired when a shade starts (seconds>0) / stops (seconds=0) calibrating, so the
+# covers can lock out commands and the card can disable its controls.
+CALIBRATING_EVENT = "shade_dashboard_calibrating"
 # Optional kill switch for the auto-recalibrate behavior (drift is still
 # detected + notified when this is off; it just won't move the shade).
 AUTO_RECAL_ENTITY = "input_boolean.shade_auto_recalibrate"

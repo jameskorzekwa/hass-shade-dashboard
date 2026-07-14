@@ -28,6 +28,7 @@ from .const import (
     AUTO_RECAL_ENTITY,
     CALIBRATE_EVENT,
     CALIBRATE_HEX,
+    CALIBRATING_EVENT,
     GATEWAY_HOST,
     GATEWAY_ROOM_SLOT,
     LIVE_EVENT,
@@ -56,6 +57,9 @@ CAL_WINDOW = 12 * 3600.0  # look back 12h at how far each shade reached
 CAL_OPEN_PCT = 90  # counts as "reached open"
 CAL_SUSPECT_PCT = 50  # a healthy shade gets at least this far open in the window
 CAL_RECAL_COOLDOWN = 12 * 3600.0  # don't recalibrate the same shade more often
+# While calibrating a shade drives to both hard stops; lock out other commands
+# for this long so nothing interferes with the limit re-teach.
+CALIBRATE_LOCK = 90.0
 
 
 def _list(data, *keys):
@@ -86,6 +90,7 @@ class GatewayTracker:
         self._reach: dict[str, list[tuple[float, int]]] = {}  # entity -> [(ts, pos)]
         self._last_recal: dict[str, float] = {}
         self._last_cal_check = 0.0
+        self._calibrating: dict[str, float] = {}  # entity -> monotonic lock expiry
 
     async def _get(self, path: str):
         async with self._session.get(f"http://{self._host}{path}", timeout=8) as resp:
@@ -111,12 +116,29 @@ class GatewayTracker:
         self._entity_to_ble = ble
         _LOGGER.debug("Gateway tracker mapped %d shades (%d with bleName)", len(mapping), len(ble))
 
+    def is_calibrating(self, entity_id: str) -> bool:
+        """Whether a shade is currently locked mid-calibration."""
+        return time.monotonic() < self._calibrating.get(entity_id, 0.0)
+
+    def _set_calibrating(self, entity_id: str, seconds: float) -> None:
+        """Lock/unlock a shade and tell its cover (seconds=0 unlocks)."""
+        if seconds > 0:
+            self._calibrating[entity_id] = time.monotonic() + seconds
+        else:
+            self._calibrating.pop(entity_id, None)
+        self.hass.bus.async_fire(CALIBRATING_EVENT, {"entity_id": entity_id, "seconds": seconds})
+
     async def async_recalibrate(self, entity_id: str) -> bool:
         """Trigger the shade's on-board calibration via the gateway BLE relay."""
         ble = self._entity_to_ble.get(entity_id)
         if not ble:
             _LOGGER.warning("No gateway bleName for %s; cannot recalibrate", entity_id)
             return False
+        if self.is_calibrating(entity_id):
+            _LOGGER.info("%s is already calibrating; ignoring recalibrate", entity_id)
+            return False
+        # Lock BEFORE sending so a command racing in right after is blocked.
+        self._set_calibrating(entity_id, CALIBRATE_LOCK)
         try:
             # bleName contains a ':' — build the URL directly to avoid re-encoding.
             url = f"http://{self._host}/home/shades/exec?shades={ble}"
@@ -125,8 +147,11 @@ class GatewayTracker:
                 data = await resp.json()
         except Exception as err:  # noqa: BLE001 - report, don't raise into the service
             _LOGGER.warning("Recalibrate %s (%s) failed: %s", entity_id, ble, err)
+            self._set_calibrating(entity_id, 0)  # unlock — it never started
             return False
         ok = isinstance(data, dict) and data.get("err") == 0
+        if not ok:
+            self._set_calibrating(entity_id, 0)  # unlock — gateway rejected it
         _LOGGER.info("Recalibrate %s (%s): %s", entity_id, ble, "accepted" if ok else data)
         return ok
 

@@ -507,7 +507,7 @@ class ShadeDashboardCard extends HTMLElement {
     });
     slider.addEventListener("change", () => {
       this._dragging = false;
-      if (!this._selected) return;
+      if (!this._selected || this._calibrating(this._selected)) return;
       const target = 100 - Number(slider.value);
       this._mark(this._entity(this._selected), target);
       this._callCover("set_cover_position", this._entity(this._selected), { position: target });
@@ -524,7 +524,7 @@ class ShadeDashboardCard extends HTMLElement {
     this._hass.callService("cover", service, Object.assign({ entity_id: entity }, extra || {}));
   }
   _commandSelected(service, target) {
-    if (!this._selected) return;
+    if (!this._selected || this._calibrating(this._selected)) return;
     this._mark(this._entity(this._selected), target);
     this._callCover(service, this._entity(this._selected));
     this._update();
@@ -532,7 +532,7 @@ class ShadeDashboardCard extends HTMLElement {
   // Recalibrate re-teaches the shade's limits and drives it to both hard stops
   // (~1 min), so it takes two taps: the first arms a 4s confirm.
   _recalSelected() {
-    if (!this._selected || !this._hass) return;
+    if (!this._selected || !this._hass || this._calibrating(this._selected)) return;
     const entity = this._entity(this._selected);
     if (this._recalArmed !== this._selected) {
       this._recalArmed = this._selected;
@@ -548,6 +548,9 @@ class ShadeDashboardCard extends HTMLElement {
     this._update();
   }
   _group(group, dir) {
+    // Refuse bulk moves while any shade is calibrating — a gateway scene can't
+    // exclude the calibrating shade.
+    if (this._anyCalibrating()) return;
     const entities = (this._layout.groups[group] || []).filter((e) => {
       const st = this._hass && this._hass.states[e];
       return st && st.state !== "unavailable";
@@ -712,6 +715,15 @@ class ShadeDashboardCard extends HTMLElement {
     const sEl = root.querySelector("[data-summary]");
     if (sEl) sEl.textContent = `${open} of ${avail} shades open${offlineN ? ` · ${offlineN} offline` : ""}`;
 
+    // While any shade is calibrating, disable bulk buttons (a scene would move
+    // the calibrating shade, which we can't exclude from a gateway scene).
+    const anyCal = this._anyCalibrating();
+    root.querySelectorAll("[data-group],[data-scene]").forEach((el) => {
+      el.style.pointerEvents = anyCal ? "none" : "";
+      el.style.opacity = anyCal ? "0.45" : "";
+      el.title = anyCal ? "A shade is calibrating — bulk controls are paused" : "";
+    });
+
     this._updateSun();
     this._updateBar();
   }
@@ -786,20 +798,30 @@ class ShadeDashboardCard extends HTMLElement {
       st && st.state === "opening" ? "Opening…"
       : st && st.state === "closing" ? "Closing…"
       : "Moving…"; // just tapped, before the cover reports a direction
-    root.querySelector("[data-bar-sub]").textContent = moving ? dirWord : meta.sub || "";
+    const calibrating = !unavailable && this._calibrating(slot);
+    root.querySelector("[data-bar-sub]").textContent = calibrating ? "Calibrating… controls locked" : moving ? dirWord : meta.sub || "";
     root.querySelector("[data-bar-ctl]").style.display = unavailable ? "none" : "flex";
     root.querySelector("[data-bar-unavail]").style.display = unavailable ? "block" : "none";
     const pctEl = root.querySelector("[data-bar-pct]");
-    pctEl.classList.toggle("sd-moving-label", moving);
+    pctEl.classList.toggle("sd-moving-label", moving || calibrating);
     if (!unavailable && !this._dragging) {
       const closed = 100 - this._dispPos(slot); // slider + readout are closed % (target while moving)
       root.querySelector("[data-bar-slider]").value = String(closed);
       pctEl.textContent = this._posLabel(closed);
     }
+    // While calibrating, lock out the shade's own controls (slider + open/close).
+    const slider = root.querySelector("[data-bar-slider]");
+    slider.disabled = calibrating;
+    ["open", "close"].forEach((a) => {
+      const b = root.querySelector(`[data-bar-action="${a}"]`);
+      b.disabled = calibrating;
+      b.style.opacity = calibrating ? "0.4" : "";
+      b.style.pointerEvents = calibrating ? "none" : "";
+    });
     // Recalibrate button: only for gateway-tracked shades (the RYSE main-bedroom
-    // shade has no recalibrate). Two-tap confirm.
+    // shade has no recalibrate). Two-tap confirm; hidden while already calibrating.
     const recalBtn = root.querySelector("[data-bar-recal]");
-    const canRecal = !unavailable && (this._layout.recal_slots || []).includes(slot);
+    const canRecal = !unavailable && !calibrating && (this._layout.recal_slots || []).includes(slot);
     recalBtn.style.display = canRecal ? "" : "none";
     if (canRecal) {
       const armed = this._recalArmed === slot;
@@ -808,6 +830,15 @@ class ShadeDashboardCard extends HTMLElement {
       recalBtn.style.background = armed ? "#8A3B1E" : "transparent";
       recalBtn.style.borderColor = armed ? "#8A3B1E" : "rgba(255,255,255,.25)";
     }
+  }
+
+  // Whether a shade is locked mid-calibration (from the cover's attribute).
+  _calibrating(slot) {
+    const st = this._stateObj(slot);
+    return !!(st && st.attributes && st.attributes.calibrating);
+  }
+  _anyCalibrating() {
+    return Object.keys(this._layout.shades).some((s) => this._calibrating(s));
   }
 }
 
