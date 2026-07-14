@@ -65,6 +65,19 @@ def test_toggles() -> None:
     assert "input_boolean.shade_automation" in text
 
 
+def test_gateway_room_slot_resolves() -> None:
+    from custom_components.shade_dashboard.const import GATEWAY_ROOM_SLOT
+
+    # every gateway room prefix must map onto real slots (room+ptName -> slot)
+    for prefix in GATEWAY_ROOM_SLOT.values():
+        if prefix == "lrh1":
+            assert "lrh1" in SHADES
+        else:
+            assert f"{prefix}1" in SHADES  # ptName 1 always exists
+    # the main bedroom is NOT on this gateway (no live tracking there)
+    assert "cover.main_bedroom_shades" not in {SHADES[f"{p}1"] for p in GATEWAY_ROOM_SLOT.values() if p != "lrh1"}
+
+
 def test_group_scenes() -> None:
     cfg = build_panel_config()
     gs = cfg["group_scenes"]
