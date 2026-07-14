@@ -102,10 +102,18 @@ const label = (slot) =>
   `<span data-label="${slot}" style="font:600 10px ui-monospace,Menlo,monospace;color:#8A8177"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winRect(slot, glass)}${label(slot)}</div>`;
+// Angled clerestory window: black trapezoid frame (outer) with the glass clipped
+// to the SAME trapezoid inset 3px *perpendicular to every edge*. A plain
+// `inset:3px` box only gives ~1.4px of border along the slanted top (the slant
+// is ~93px long over a 40px rise), so the glass clip is offset per-edge instead:
+// the top corners drop to y=4.75 / 41.9 so the top border reads a true 3px, matching
+// the 3px left/right/bottom. (Geometry fixed for the 84px width + 40px top drop.)
+const ANGLED_GLASS_CLIP =
+  "polygon(3px 4.75px, calc(100% - 3px) 41.9px, calc(100% - 3px) calc(100% - 3px), 3px calc(100% - 3px))";
 const winAngled = (slot, h) =>
   `<div data-slot="${slot}" title="${slot}" style="width:84px;height:${h}px;position:relative;cursor:pointer">` +
     `<div style="position:absolute;inset:0;clip-path:polygon(0 0,100% 40px,100% 100%,0 100%);background:#1F1B17"></div>` +
-    `<div style="position:absolute;inset:3px;clip-path:polygon(0 0,100% 38px,100% 100%,0 100%);background:${GLASS_UPPER};overflow:hidden">${fabric(slot, 3)}</div>` +
+    `<div style="position:absolute;inset:0;clip-path:${ANGLED_GLASS_CLIP};background:${GLASS_UPPER};overflow:hidden">${fabric(slot, 3)}</div>` +
   `</div>`;
 const chip = (group, text) =>
   `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10px;letter-spacing:1.2px;color:#8A8177;font-weight:600">${text}</span>` +
