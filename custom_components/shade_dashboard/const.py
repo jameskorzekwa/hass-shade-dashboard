@@ -33,6 +33,20 @@ GATEWAY_ROOM_SLOT: dict[int, str] = {
 # The live-position event the poller fires and the card subscribes to.
 LIVE_EVENT = "shade_dashboard_live_position"
 
+# hass.data key for the process-global gateway tracker.
+TRACKER_KEY = f"{DOMAIN}_tracker"
+
+# Recalibrate a shade via the gateway's generic BLE relay: POST
+# /home/shades/exec?shades=<bleName> with this frame (sid 0xF7 motion service,
+# cid 0xD4 = calibrate). Captured from the PowerView app; the gateway encrypts
+# and forwards it to the shade over Bluetooth (no BLE proxy / home key needed).
+CALIBRATE_HEX = "F7D40303000001"
+# Fired when calibration drift is detected (and auto-recalibrated).
+CALIBRATE_EVENT = "shade_dashboard_calibration"
+# Optional kill switch for the auto-recalibrate behavior (drift is still
+# detected + notified when this is off; it just won't move the shade).
+AUTO_RECAL_ENTITY = "input_boolean.shade_auto_recalibrate"
+
 # --- Window slots -> real cover entity IDs (verified live) -------------------
 # Slot keys match the geometry keys in shade-dashboard-card.js.
 SHADES: dict[str, str] = {
@@ -217,6 +231,7 @@ def build_panel_config() -> dict:
     group_scenes = _resolve_group_scenes()
     for spec in group_scenes.values():
         spec["direct"] = [_to_abstract(e) for e in spec.get("direct", [])]
+    tracked = set(_tracked_entities())
     return {
         "shades": shades,
         "groups": groups,
@@ -225,4 +240,6 @@ def build_panel_config() -> dict:
         "sun": SUN,
         "toggles": TOGGLES,
         "tracked": _tracked_entities(),
+        # slots whose shade supports recalibration (PowerView; excludes RYSE mbr1)
+        "recal_slots": [slot for slot, entity in SHADES.items() if entity in tracked],
     }

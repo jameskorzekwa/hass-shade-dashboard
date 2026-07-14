@@ -19,6 +19,8 @@ closed-% it displays.
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.cover import (
     ATTR_POSITION,
     CoverDeviceClass,
@@ -37,10 +39,15 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN, LIVE_EVENT, SHADES, _tracked_entities
+from .const import DOMAIN, LIVE_EVENT, SHADES, TRACKER_KEY, _tracked_entities
+
+_LOGGER = logging.getLogger(__name__)
+
+SERVICE_RECALIBRATE = "recalibrate"
 
 # Gateway calibration: a fully-closed shade reads ~2-3 and fully-open ~97-98, so
 # snap those to clean 0/100 at rest (matches the card's old _clampLive).
@@ -56,9 +63,12 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create one unified cover per shade."""
+    """Create one unified cover per shade + the recalibrate service."""
     tracked = set(_tracked_entities())
     async_add_entities(ShadeCover(slot, source, source in tracked) for slot, source in SHADES.items())
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        SERVICE_RECALIBRATE, {}, "async_recalibrate"
+    )
 
 
 class ShadeCover(CoverEntity):
@@ -221,6 +231,22 @@ class ShadeCover(CoverEntity):
     async def async_stop_cover(self, **kwargs) -> None:
         """Stop the real cover."""
         await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
+
+    async def async_recalibrate(self) -> None:
+        """Re-teach this shade's PowerView travel limits (gateway BLE relay).
+
+        Fixes a shade whose reported position has drifted from reality. Only
+        gateway-tracked (PowerView) shades support it; the RYSE main-bedroom
+        shade is on a different system.
+        """
+        if not self._tracked:
+            _LOGGER.warning("%s is not a PowerView shade; cannot recalibrate", self.entity_id)
+            return
+        tracker = self.hass.data.get(TRACKER_KEY)
+        if tracker is None:
+            _LOGGER.warning("Gateway tracker not running; cannot recalibrate %s", self.entity_id)
+            return
+        await tracker.async_recalibrate(self._source)
 
     async def _command(self, target: int) -> None:
         """Route a movement to the real device, holding position until it moves."""

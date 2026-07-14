@@ -1,0 +1,10 @@
+recalibrate:
+  name: Recalibrate shade
+  description: >-
+    Re-teach a PowerView shade's travel limits when its reported position has
+    drifted from reality (the shade drives to both hard stops). Only works for
+    the gateway-tracked PowerView shades, not the RYSE main-bedroom shade.
+  target:
+    entity:
+      integration: shade_dashboard
+      domain: cover

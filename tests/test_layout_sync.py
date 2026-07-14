@@ -98,6 +98,16 @@ def test_group_scenes() -> None:
     assert "west_upper_open" in CARD_JS.read_text()
 
 
+def test_recal_slots_exclude_main_bedroom() -> None:
+    cfg = build_panel_config()
+    recal = cfg["recal_slots"]
+    # every PowerView slot is recalibratable; the RYSE main-bedroom shade is not
+    assert "mbr1" not in recal
+    assert "lrh1" in recal and "ko1" in recal
+    assert len(recal) == len(SHADES) - 1
+    assert "DEFAULT_LAYOUT.recal_slots" in CARD_JS.read_text()
+
+
 def test_groups_resolve_to_entities() -> None:
     cfg = build_panel_config()
     assert len(cfg["groups"]["main_floor"]) == 16
