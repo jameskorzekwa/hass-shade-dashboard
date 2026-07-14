@@ -110,37 +110,11 @@ SCENES: dict[str, dict] = {
     "close_all": {"title": "Close All", "desc": "Every shade down", "kind": "group", "group": "all", "dir": "down"},
 }
 
-# --- Group -> PowerView scenes ----------------------------------------------
-# Bulk/group open+close fire in-sync gateway scenes (a scene moves all its member
-# shades together; cover.open_cover on a list can serialize). Composed from the
-# owner's CLEAN sub-scenes (avoids the polluted "West" and the uh2-missing
-# "Close All Upstairs"). ``direct`` lists entities NOT on the gateway (the main
-# bedroom) that the card must move with cover services alongside the scene.
-# Values are scene object_ids under scene.living_room_gateway_*.
-_SCENE_PREFIX = "scene.living_room_gateway_"
-_GROUP_SCENES: dict[str, dict] = {
-    "south": {"open": ["south_open"], "close": ["south_close"]},
-    "west": {"open": ["west_upper_open", "west_lower_open"], "close": ["west_upper_close", "west_lower_close"]},
-    "north": {"open": ["north_open"], "close": ["north_close"]},
-    "hallway": {"open": ["downstairs_hall_open"], "close": ["downstairs_hall_close"]},
-    "upstairs_hallway": {"open": ["hallway_open"], "close": ["hallway_close"]},
-    "office": {"open": ["office_open"], "close": ["office_close"]},
-    "main_floor": {
-        "open": ["open_living_room", "downstairs_hall_open"],
-        "close": ["close_living_room", "downstairs_hall_close"],
-    },
-    "upstairs": {
-        "open": ["open_all_upstairs_shades"],
-        "close": ["hallway_close", "office_close"],
-        "direct": ["cover.main_bedroom_shades"],
-    },
-    "all": {
-        "open": ["open_all_shades"],
-        "close": ["close_all_shades"],
-        "direct": ["cover.main_bedroom_shades"],
-    },
-    # main_bedroom has no gateway scene -> the card uses cover services.
-}
+# Group open/close no longer uses PowerView scenes at all. The card calls
+# shade_dashboard.move_group, which moves every gateway-tracked member in ONE
+# synchronized `PUT /home/shades/positions?ids=<all ids>` call (verified in-sync)
+# and moves untracked members (the RYSE main bedroom) via their cover — so the
+# dashboard has zero dependency on the app-created scenes.
 
 # --- Left-rail toggles -------------------------------------------------------
 # Each reflects an input_boolean and flips it on tap. ``automation`` uses the
@@ -177,18 +151,6 @@ SUN: dict[str, str] = {
 }
 
 
-def _resolve_group_scenes() -> dict:
-    """Expand scene object_ids to full scene.* entity IDs."""
-    out: dict[str, dict] = {}
-    for group, spec in _GROUP_SCENES.items():
-        out[group] = {
-            "open": [_SCENE_PREFIX + s for s in spec.get("open", [])],
-            "close": [_SCENE_PREFIX + s for s in spec.get("close", [])],
-            "direct": list(spec.get("direct", [])),
-        }
-    return out
-
-
 def _tracked_entities() -> list[str]:
     """Cover entities on the G3 gateway (everything with live tracking) — i.e.
     every shade whose slot prefix is a gateway room. The main bedroom shade is on
@@ -217,28 +179,25 @@ def abstract_entity(slot: str) -> str:
     return f"{ABSTRACT_PREFIX}{slot}"
 
 
-def _to_abstract(entity: str) -> str:
-    """Map a real source cover to its abstract cover (pass others through)."""
-    slot = _SOURCE_TO_SLOT.get(entity)
-    return abstract_entity(slot) if slot else entity
+def source_for_abstract(entity: str) -> str | None:
+    """Map an abstraction cover (cover.shade_<slot>) to its real source cover."""
+    if entity.startswith(ABSTRACT_PREFIX):
+        return SHADES.get(entity[len(ABSTRACT_PREFIX) :])
+    return entity if entity in _SOURCE_TO_SLOT else None
 
 
 def build_panel_config() -> dict:
     """Resolve the slot layout into the JSON config handed to the card.
 
-    Everything the card commands/reads is the abstract cover; the underlying
-    PowerView scenes (fired for in-sync bulk moves) stay as real scene entities.
+    Everything the card commands/reads is the abstract cover; bulk group moves go
+    through shade_dashboard.move_group (direct in-sync gateway calls, no scenes).
     """
     shades = {slot: {"entity": abstract_entity(slot)} for slot in SHADES}
     groups = {name: [abstract_entity(slot) for slot in slots] for name, slots in _GROUP_SLOTS.items()}
-    group_scenes = _resolve_group_scenes()
-    for spec in group_scenes.values():
-        spec["direct"] = [_to_abstract(e) for e in spec.get("direct", [])]
     tracked = set(_tracked_entities())
     return {
         "shades": shades,
         "groups": groups,
-        "group_scenes": group_scenes,
         "scenes": SCENES,
         "sun": SUN,
         "toggles": TOGGLES,
