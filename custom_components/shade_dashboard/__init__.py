@@ -122,9 +122,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # merely returns the coroutine is never awaited -> silent no-op).
             await _async_move_group(hass, call)
 
-        hass.services.async_register(
-            DOMAIN, SERVICE_MOVE_GROUP, _handle_move_group, schema=MOVE_GROUP_SCHEMA
-        )
+        hass.services.async_register(DOMAIN, SERVICE_MOVE_GROUP, _handle_move_group, schema=MOVE_GROUP_SCHEMA)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
