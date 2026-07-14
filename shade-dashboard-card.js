@@ -93,6 +93,8 @@ DEFAULT_LAYOUT.group_scenes = {
 };
 // Entities on the G3 gateway (live-tracked). Everything except the main bedroom.
 DEFAULT_LAYOUT.tracked = Object.entries(DEFAULT_LAYOUT.shades).filter(([s]) => s !== "mbr1").map(([, v]) => v.entity);
+// Slots that support recalibration (PowerView shades; the RYSE main-bedroom shade does not).
+DEFAULT_LAYOUT.recal_slots = Object.keys(DEFAULT_LAYOUT.shades).filter((s) => s !== "mbr1");
 
 // Presentation metadata (label number + control-bar subtitle). Card-side only.
 const SLOT_META = {
@@ -463,6 +465,7 @@ class ShadeDashboardCard extends HTMLElement {
         <span data-bar-pct style="font:600 13px ui-monospace,Menlo,monospace;min-width:62px;text-align:right"></span>
         <button data-bar-action="close" style="padding:8px 14px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#F5F1EA;cursor:pointer;font-weight:600;font-size:12px">Close</button>
         <button data-bar-action="open" style="padding:8px 14px;border-radius:9px;border:none;background:${ACCENT};color:#FFF;cursor:pointer;font-weight:600;font-size:12px">Open</button>
+        <button data-bar-recal title="Re-teach this shade's travel limits" style="display:none;padding:8px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#B8AF9F;cursor:pointer;font-weight:600;font-size:12px;flex-shrink:0">Recalibrate</button>
       </div>
       <div data-bar-unavail style="display:none;flex:1;font-size:12px;color:#E4B7A0">Unavailable in Home Assistant — check shade power or the PowerView gateway.</div>
     </div>
@@ -512,6 +515,7 @@ class ShadeDashboardCard extends HTMLElement {
     });
     root.querySelector('[data-bar-action="open"]').addEventListener("click", () => this._commandSelected("open_cover", 100));
     root.querySelector('[data-bar-action="close"]').addEventListener("click", () => this._commandSelected("close_cover", 0));
+    root.querySelector("[data-bar-recal]").addEventListener("click", () => this._recalSelected());
   }
 
   // --- actions ---------------------------------------------------------------
@@ -523,6 +527,24 @@ class ShadeDashboardCard extends HTMLElement {
     if (!this._selected) return;
     this._mark(this._entity(this._selected), target);
     this._callCover(service, this._entity(this._selected));
+    this._update();
+  }
+  // Recalibrate re-teaches the shade's limits and drives it to both hard stops
+  // (~1 min), so it takes two taps: the first arms a 4s confirm.
+  _recalSelected() {
+    if (!this._selected || !this._hass) return;
+    const entity = this._entity(this._selected);
+    if (this._recalArmed !== this._selected) {
+      this._recalArmed = this._selected;
+      clearTimeout(this._recalTimer);
+      this._recalTimer = setTimeout(() => { this._recalArmed = null; this._update(); }, 4000);
+      this._update();
+      return;
+    }
+    clearTimeout(this._recalTimer);
+    this._recalArmed = null;
+    this._hass.callService("shade_dashboard", "recalibrate", { entity_id: entity });
+    this._mark(entity); // flash it — it's about to cycle its limits
     this._update();
   }
   _group(group, dir) {
@@ -773,6 +795,18 @@ class ShadeDashboardCard extends HTMLElement {
       const closed = 100 - this._dispPos(slot); // slider + readout are closed % (target while moving)
       root.querySelector("[data-bar-slider]").value = String(closed);
       pctEl.textContent = this._posLabel(closed);
+    }
+    // Recalibrate button: only for gateway-tracked shades (the RYSE main-bedroom
+    // shade has no recalibrate). Two-tap confirm.
+    const recalBtn = root.querySelector("[data-bar-recal]");
+    const canRecal = !unavailable && (this._layout.recal_slots || []).includes(slot);
+    recalBtn.style.display = canRecal ? "" : "none";
+    if (canRecal) {
+      const armed = this._recalArmed === slot;
+      recalBtn.textContent = armed ? "Tap to confirm" : "Recalibrate";
+      recalBtn.style.color = armed ? "#FFF" : "#B8AF9F";
+      recalBtn.style.background = armed ? "#8A3B1E" : "transparent";
+      recalBtn.style.borderColor = armed ? "#8A3B1E" : "rgba(255,255,255,.25)";
     }
   }
 }

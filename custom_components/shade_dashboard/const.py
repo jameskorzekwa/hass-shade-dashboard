@@ -231,6 +231,7 @@ def build_panel_config() -> dict:
     group_scenes = _resolve_group_scenes()
     for spec in group_scenes.values():
         spec["direct"] = [_to_abstract(e) for e in spec.get("direct", [])]
+    tracked = set(_tracked_entities())
     return {
         "shades": shades,
         "groups": groups,
@@ -239,4 +240,6 @@ def build_panel_config() -> dict:
         "sun": SUN,
         "toggles": TOGGLES,
         "tracked": _tracked_entities(),
+        # slots whose shade supports recalibration (PowerView; excludes RYSE mbr1)
+        "recal_slots": [slot for slot, entity in SHADES.items() if entity in tracked],
     }
