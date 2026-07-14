@@ -1,7 +1,5 @@
 {
   "name": "Shade Dashboard",
   "render_readme": true,
-  "zip_release": true,
-  "filename": "shade_dashboard.zip",
   "homeassistant": "2024.6.0"
 }

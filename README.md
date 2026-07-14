@@ -58,4 +58,3 @@ Standards mirror the other integrations in this account: tests + ruff + CI +
 auto-release-on-merge. Every merge to `main` that passes CI cuts a `vX.Y.Z`
 release automatically.
 
-<!-- CI: initial pipeline -->
