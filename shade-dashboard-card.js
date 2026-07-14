@@ -477,7 +477,7 @@ class ShadeDashboardCard extends HTMLElement {
     <div style="display:flex;gap:8px;align-items:center">
       <button data-tab="main" class="pill">Main Floor</button>
       <button data-tab="up" class="pill">Upstairs</button>
-      <button data-tab="settings" class="pill" title="Settings" style="margin-left:auto">⚙ Settings</button>
+      <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:17px">⚙</button>
     </div>
 
     <div data-panel="main" style="flex-direction:column;gap:8px;flex:1;min-height:0;min-width:0">
