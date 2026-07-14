@@ -102,19 +102,49 @@ const label = (slot) =>
   `<span data-label="${slot}" style="font:600 10px ui-monospace,Menlo,monospace;color:#8A8177"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winRect(slot, glass)}${label(slot)}</div>`;
-// Angled clerestory window: black trapezoid frame (outer) with the glass clipped
-// to the SAME trapezoid inset 3px *perpendicular to every edge*. A plain
-// `inset:3px` box only gives ~1.4px of border along the slanted top (the slant
-// is ~93px long over a 40px rise), so the glass clip is offset per-edge instead:
-// the top corners drop to y=4.75 / 41.9 so the top border reads a true 3px, matching
-// the 3px left/right/bottom. (Geometry fixed for the 84px width + 40px top drop.)
-const ANGLED_GLASS_CLIP =
-  "polygon(3px 4.75px, calc(100% - 3px) 41.9px, calc(100% - 3px) calc(100% - 3px), 3px calc(100% - 3px))";
-const winAngled = (slot, h) =>
-  `<div data-slot="${slot}" title="${slot}" style="width:84px;height:${h}px;position:relative;cursor:pointer">` +
-    `<div style="position:absolute;inset:0;clip-path:polygon(0 0,100% 40px,100% 100%,0 100%);background:#1F1B17"></div>` +
-    `<div style="position:absolute;inset:0;clip-path:${ANGLED_GLASS_CLIP};background:${GLASS_UPPER};overflow:hidden">${fabric(slot, 3)}</div>` +
-  `</div>`;
+// SVG path for a rounded polygon (corner radius r) through the given [x,y] points.
+const roundedPath = (pts, r) => {
+  const n = pts.length;
+  let d = "";
+  const q = (v) => Math.round(v * 100) / 100;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = pts[(i - 1 + n) % n];
+    const [bx, by] = pts[i];
+    const [cx, cy] = pts[(i + 1) % n];
+    const b1 = Math.hypot(ax - bx, ay - by) || 1;
+    const b2 = Math.hypot(cx - bx, cy - by) || 1;
+    const rr = Math.min(r, b1 / 2, b2 / 2);
+    const p1x = bx + ((ax - bx) / b1) * rr, p1y = by + ((ay - by) / b1) * rr;
+    const p2x = bx + ((cx - bx) / b2) * rr, p2y = by + ((cy - by) / b2) * rr;
+    d += `${i === 0 ? "M" : "L"}${q(p1x)},${q(p1y)}Q${q(bx)},${q(by)} ${q(p2x)},${q(p2y)}`;
+  }
+  return d + "Z";
+};
+
+// Angled clerestory window: the SAME window as a rectangle (rounded 3px frame,
+// glass, animated fabric) but with the top sliced at the shared angle (40px drop
+// over the 84px width). CSS clip-path can't keep rounded corners, so the frame +
+// glass are drawn as a rounded SVG trapezoid (outer = #1F1B17, inset 3px = glass),
+// and the fabric stays a plain div clipped to the glass shape — so _setFabric and
+// the 0.45s animation are unchanged. Top glass corners drop to y=4.75/41.9 so the
+// sliced top border reads a true, uniform 3px like the sides and bottom.
+const winAngled = (slot, h) => {
+  const outer = roundedPath([[0, 0], [84, 40], [84, h], [0, h]], 3);
+  const inner = roundedPath([[3, 4.75], [81, 41.9], [81, h - 3], [3, h - 3]], 2);
+  return (
+    `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:${h}px;cursor:pointer">` +
+      `<svg width="84" height="${h}" viewBox="0 0 84 ${h}" style="position:absolute;inset:0;display:block">` +
+        `<defs>` +
+          `<linearGradient id="sd-g-${slot}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CBD6DC"/><stop offset="1" stop-color="#E2E2D6"/></linearGradient>` +
+          `<clipPath id="sd-clip-${slot}" clipPathUnits="userSpaceOnUse"><path d="${inner}"/></clipPath>` +
+        `</defs>` +
+        `<path d="${outer}" fill="#1F1B17"/>` +
+        `<path d="${inner}" fill="url(#sd-g-${slot})"/>` +
+      `</svg>` +
+      `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid #C2B9A9;transition:height .45s ease;clip-path:url(#sd-clip-${slot})"></div>` +
+    `</div>`
+  );
+};
 const chip = (group, text) =>
   `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10px;letter-spacing:1.2px;color:#8A8177;font-weight:600">${text}</span>` +
     `<button data-group="${group}" data-dir="up" title="Open" style="width:30px;height:26px;border:1px solid #DFD7C9;background:#FFFDF9;border-radius:7px;cursor:pointer;font-size:10px;color:#4A4237;padding:0">▲</button>` +
@@ -211,7 +241,8 @@ class ShadeDashboardCard extends HTMLElement {
     // West wall: 4 angled uppers over 4 lowers
     const west =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
-        `<div style="display:flex;flex-direction:column;gap:68px;align-items:center">` +
+        // gap sized so the angled uppers' bottoms line up with the south-wall uppers' bottoms
+        `<div style="display:flex;flex-direction:column;gap:72px;align-items:center">` +
           `<div style="display:flex;align-items:flex-end;gap:14px">${winAngled("u4", 190)}${winAngled("u5", 150)}${winAngled("u6", 110)}${winAngled("u7", 70)}</div>` +
           `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("l3")}${lowerCol("l4")}${lowerCol("l5")}${lowerCol("l6")}</div>` +
         `</div>` +
