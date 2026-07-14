@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, build_panel_config
+from .gateway import GatewayTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 CARD_FILENAME = "shade-dashboard-card.js"
 CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
 CARD_REGISTERED_KEY = f"{DOMAIN}_card_registered"
+TRACKER_KEY = f"{DOMAIN}_tracker"
 PANEL_URL_PATH = "shades"
 WEBCOMPONENT_NAME = "shade-dashboard-card"
 
@@ -66,6 +68,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:  # noqa: BLE001 - registration must never break setup
             _LOGGER.exception("Failed to register shade dashboard card")
 
+    # Live position tracking: poll the PowerView gateway and fire live-position
+    # events the card follows during motion. Process-global (one poller).
+    if TRACKER_KEY not in hass.data:
+        tracker = GatewayTracker(hass)
+        hass.data[TRACKER_KEY] = tracker
+        await tracker.start()
+
     return True
 
 
@@ -75,4 +84,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     The card/panel registration is process-global and cheap to leave in place;
     unload simply succeeds so the entry can be reloaded.
     """
+    tracker = hass.data.pop(TRACKER_KEY, None)
+    if tracker is not None:
+        await tracker.stop()
     return True

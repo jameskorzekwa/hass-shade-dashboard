@@ -16,6 +16,23 @@ from __future__ import annotations
 
 DOMAIN = "shade_dashboard"
 
+# --- PowerView Gen3 gateway (live position tracking) -------------------------
+# The card only gets endpoint positions from the hunterdouglas_powerview
+# integration (jumpy/slow during travel). The gateway's local API reports live
+# position + velocity, so a poller (gateway.py) reads it during motion and fires
+# ``shade_dashboard_live_position`` events the card follows. Gateway room id ->
+# slot prefix (ptName is appended, except the single Downstairs Hall shade).
+GATEWAY_HOST = "192.168.1.25"
+GATEWAY_ROOM_SLOT: dict[int, str] = {
+    165: "u",  # Family Upper  -> u1..u7
+    64: "l",  # Family Lower  -> l1..l8
+    1: "uh",  # Hallway       -> uh1..uh3
+    21: "ko",  # Office        -> ko1..ko2
+    146: "lrh1",  # Downstairs Hall -> lrh1 (single shade)
+}
+# The live-position event the poller fires and the card subscribes to.
+LIVE_EVENT = "shade_dashboard_live_position"
+
 # --- Window slots -> real cover entity IDs (verified live) -------------------
 # Slot keys match the geometry keys in shade-dashboard-card.js.
 SHADES: dict[str, str] = {

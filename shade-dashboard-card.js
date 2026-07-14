@@ -188,8 +188,15 @@ const winAngled = (slot, h) => {
         `<path data-ring="${slot}" d="${ring(2, 5)}" fill="#F5F1EA" style="display:none"/>` +
         `<path d="${outer}" fill="#1F1B17"/>` +
         `<path d="${inner}" fill="url(#sd-g-${slot})"/>` +
+        // in-motion flash ring, following the trapezoid (pulses via .sd-flash-ring-on)
+        `<path data-flash-ring="${slot}" d="${ring(2.5, 6)}" fill="none" stroke="${ACCENT}" stroke-width="3" stroke-linejoin="round" stroke-opacity="0"/>` +
       `</svg>` +
-      `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease;clip-path:url(#sd-clip-${slot})"></div>` +
+      // Fabric lives in a clipped container inset 3px at the bottom, so at fully
+      // closed its hem sits right on top of the bottom frame (like the rectangle
+      // windows) instead of being clipped away.
+      `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
+        `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease"></div>` +
+      `</div>` +
       flash(slot, true) +
     `</div>`
   );
@@ -226,6 +233,12 @@ class ShadeDashboardCard extends HTMLElement {
     // a shade is opening/closing). Reconciled/cleared in _reconcileOptimistic.
     this._optimistic = {};
     this._optTimers = {};
+    // Live gateway positions (from shade_dashboard_live_position events): the
+    // REAL position + motion while a shade physically travels, which HA doesn't
+    // report. entity_id -> position(0-100); _liveMoving = Set(entity_id).
+    this._live = {};
+    this._liveMoving = new Set();
+    this._liveSub = null;
   }
 
   setConfig(config) {
@@ -243,9 +256,28 @@ class ShadeDashboardCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._maybeBuild();
+    this._subscribeLive();
     this._update();
   }
   get hass() { return this._hass; }
+
+  // Subscribe once to the integration's live-position events.
+  _subscribeLive() {
+    if (this._liveSub || !this._hass || !this._hass.connection) return;
+    this._liveSub = true; // guard against re-subscribe while the promise resolves
+    this._hass.connection
+      .subscribeEvents((ev) => {
+        const d = (ev && ev.data) || {};
+        this._live = d.positions || {};
+        this._liveMoving = new Set(d.moving || []);
+        this._update();
+      }, "shade_dashboard_live_position")
+      .then((unsub) => { this._liveSub = unsub; })
+      .catch(() => { this._liveSub = null; });
+  }
+  disconnectedCallback() {
+    if (typeof this._liveSub === "function") { this._liveSub(); this._liveSub = null; }
+  }
   getCardSize() { return 12; }
 
   _entity(slot) {
@@ -263,16 +295,20 @@ class ShadeDashboardCard extends HTMLElement {
     if (p != null) return Math.round(p);
     return st.state === "open" ? 100 : 0; // no position support -> binary
   }
-  // Display position: the commanded target while a command is in flight, else
-  // the live current_position — so the shade jumps to where it's going and holds.
+  // Display position, best source first:
+  //  1. the REAL live gateway position while the shade is physically moving,
+  //  2. the commanded target while a command is in flight (instant feedback),
+  //  3. HA current_position at rest.
   _dispPos(slot) {
     const e = this._entity(slot);
+    if (e && this._liveMoving.has(e) && this._live[e] != null) return this._live[e];
     if (e && this._optimistic[e]) return this._optimistic[e].target;
     return this._pos(slot);
   }
   _isMoving(slot) {
     const st = this._stateObj(slot);
     const e = this._entity(slot);
+    if (e && this._liveMoving.has(e)) return true; // real gateway motion
     if (st && (st.state === "opening" || st.state === "closing")) return true;
     return !!(e && this._optimistic[e]);
   }
@@ -406,6 +442,9 @@ class ShadeDashboardCard extends HTMLElement {
   .sd-flash-ov { position:absolute; inset:0; background:${ACCENT}; opacity:0; pointer-events:none; }
   @keyframes sd-flash-anim { 0%,100% { opacity:0; } 50% { opacity:.34; } }
   .sd-flash-on { animation: sd-flash-anim .95s ease-in-out infinite; }
+  /* angled windows pulse an SVG stroke ring (follows the trapezoid) instead of the rect outline */
+  @keyframes sd-ring-pulse { 0%,100% { stroke-opacity:.95; } 50% { stroke-opacity:.12; } }
+  .sd-flash-ring-on { animation: sd-ring-pulse .95s ease-in-out infinite; }
   @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
   .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }
 </style>
@@ -610,16 +649,22 @@ class ShadeDashboardCard extends HTMLElement {
       const fl = root.querySelector(`[data-flash="${slot}"]`);
       const lab = root.querySelector(`[data-label="${slot}"]`);
       const selected = this._selected === slot;
+      const flashRing = win ? win.querySelectorAll("[data-flash-ring]") : []; // angled: SVG motion ring
       if (win) {
-        const rings = win.querySelectorAll("[data-ring]"); // angled windows draw the ring in SVG
+        const rings = win.querySelectorAll("[data-ring]"); // angled windows draw the selection ring in SVG
         if (rings.length) {
           win.style.boxShadow = "none";
           rings.forEach((p) => (p.style.display = selected ? "" : "none"));
         } else {
           win.style.boxShadow = selected ? RING : "none";
         }
+        // Motion outline: angled -> pulse the SVG trapezoid ring; rect/door -> CSS outline.
+        if (flashRing.length) {
+          flashRing.forEach((p) => p.classList.toggle("sd-flash-ring-on", moving));
+        } else {
+          win.classList.toggle("sd-moving", moving);
+        }
       }
-      if (win) win.classList.toggle("sd-moving", moving);
       if (fl) fl.classList.toggle("sd-flash-on", moving);
       if (off) off.style.display = unavailable ? "flex" : "none";
       if (win) win.style.borderColor = unavailable ? "#B5AC9D" : "#1F1B17";
