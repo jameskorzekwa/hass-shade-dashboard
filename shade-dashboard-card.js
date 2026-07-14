@@ -322,11 +322,26 @@ class ShadeDashboardCard extends HTMLElement {
       if (this._liveMoving.has(e) && this._live[e] != null) return this._live[e];
       // 2. just commanded, not yet moving: HOLD (don't jump to HA's optimistic target)
       if (this._holdPos[e] != null) return this._holdPos[e];
-      // 3. at rest: HA current_position (calibrated 0=closed..100=open)
+      // 3. at rest: keep the last LIVE gateway reading (the poller keeps it fresh,
+      //    ~2s), clamped so the endpoints read clean 0/100. HA's current_position
+      //    lags the gateway badly right after a move — falling back to it here made
+      //    a finished shade snap back to a stale value, so only use it when we've
+      //    never had a live reading for this shade.
+      if (this._live[e] != null) return this._clampLive(this._live[e]);
       return this._pos(slot);
     }
     if (e && this._optimistic[e]) return this._optimistic[e].target;
     return this._pos(slot);
+  }
+  // Snap a live gateway reading to a clean endpoint: the gateway reports a
+  // fully-closed shade around 2-3% and fully-open around 97-98% (calibration
+  // offset from HA's 0/100), so at rest we round those to 0/100 to match HA's
+  // labels. Only applied at rest (branch 3) — motion shows the raw value so the
+  // fabric travels smoothly.
+  _clampLive(p) {
+    if (p <= 3) return 0;
+    if (p >= 97) return 100;
+    return p;
   }
   _isMoving(slot) {
     const e = this._entity(slot);
