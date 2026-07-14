@@ -5,6 +5,11 @@
     "@jameskorzekwa"
   ],
   "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom"
+  ],
   "documentation": "https://github.com/jameskorzekwa/hass-shade-dashboard",
   "integration_type": "service",
   "iot_class": "calculated",

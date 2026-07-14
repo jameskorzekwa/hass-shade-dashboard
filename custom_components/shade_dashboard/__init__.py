@@ -16,22 +16,20 @@ import os
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, build_panel_config
 
 _LOGGER = logging.getLogger(__name__)
+
+# Config-entry-only integration (set up from the UI, no YAML config).
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 CARD_FILENAME = "shade-dashboard-card.js"
 CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
 CARD_REGISTERED_KEY = f"{DOMAIN}_card_registered"
 PANEL_URL_PATH = "shades"
 WEBCOMPONENT_NAME = "shade-dashboard-card"
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the Shade Dashboard component."""
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
