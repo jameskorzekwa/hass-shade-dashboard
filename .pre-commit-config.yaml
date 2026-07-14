@@ -1,0 +1,40 @@
+# Local enforcement (uses the project's own venv tools — no pinned-version drift).
+# Install: pip install pre-commit && pre-commit install && pre-commit install --hook-type pre-push
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: python3 -m ruff check
+        language: system
+        types: [python]
+        files: ^(custom_components|tests)/.*\.py$
+
+      - id: ruff-format
+        name: ruff format (auto-fix new/edited code)
+        entry: python3 -m ruff format
+        language: system
+        types: [python]
+        files: ^(custom_components|tests)/.*\.py$
+
+      - id: card-js-syntax
+        name: card JS syntax
+        entry: node --check custom_components/shade_dashboard/shade-dashboard-card.js
+        language: system
+        pass_filenames: false
+        files: shade-dashboard-card\.js$
+
+      - id: card-copies-in-sync
+        name: card copies byte-identical
+        entry: bash -c 'diff -q shade-dashboard-card.js custom_components/shade_dashboard/shade-dashboard-card.js'
+        language: system
+        pass_filenames: false
+        files: shade-dashboard-card\.js$
+
+      - id: pytest
+        name: pytest (full suite, pre-push)
+        entry: python3 -m pytest tests/ -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

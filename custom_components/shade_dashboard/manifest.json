@@ -1,0 +1,14 @@
+{
+  "domain": "shade_dashboard",
+  "name": "Shade Dashboard",
+  "codeowners": [
+    "@jameskorzekwa"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/jameskorzekwa/hass-shade-dashboard",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/jameskorzekwa/hass-shade-dashboard/issues",
+  "version": "0.1.0",
+  "requirements": []
+}

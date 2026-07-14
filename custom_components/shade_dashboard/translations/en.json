@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Shade Dashboard",
+        "description": "Install the Shades dashboard. This adds a \"Shades\" panel to the sidebar and registers the shade-dashboard-card. No configuration is needed — the window layout is built in."
+      }
+    },
+    "abort": {
+      "already_configured": "Shade Dashboard is already installed."
+    }
+  }
+}

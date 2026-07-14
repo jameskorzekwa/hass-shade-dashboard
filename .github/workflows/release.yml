@@ -1,0 +1,130 @@
+name: CI & Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'AGENTS.md'
+      - '**/AGENTS.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'AGENTS.md'
+      - '**/AGENTS.md'
+
+permissions:
+  contents: write
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff check
+        run: ruff check custom_components/ tests/
+      - name: Ruff format check
+        run: ruff format --check custom_components/ tests/
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements_test.txt
+      - name: Run tests with coverage
+        run: pytest tests/ -v --tb=short --cov=custom_components --cov-report=term-missing
+
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate manifest.json
+        run: |
+          python -c "
+          import json, sys
+          m = json.load(open('custom_components/shade_dashboard/manifest.json'))
+          for key in ['domain', 'name', 'version']:
+              if key not in m:
+                  print(f'Missing required key: {key}'); sys.exit(1)
+          print(f'Manifest OK: {m[\"domain\"]} v{m[\"version\"]}')
+          "
+      - name: Validate hacs.json
+        run: python -c "import json; print('HACS OK:', json.load(open('hacs.json'))['name'])"
+      - name: Validate JS syntax
+        run: node --check custom_components/shade_dashboard/shade-dashboard-card.js
+      - name: Card copies in sync
+        run: |
+          diff -q shade-dashboard-card.js custom_components/shade_dashboard/shade-dashboard-card.js \
+            || { echo "::error::card copies differ — keep both byte-identical"; exit 1; }
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master
+
+  release:
+    name: Release
+    needs: [lint, test, validate]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Get current version from manifest
+        id: version
+        run: echo "current=$(jq -r '.version' custom_components/shade_dashboard/manifest.json)" >> "$GITHUB_OUTPUT"
+      - name: Decide release version (release manifest as-is if its tag is new, else bump patch)
+        id: bump
+        run: |
+          CURRENT="${{ steps.version.outputs.current }}"
+          if git rev-parse "v$CURRENT" >/dev/null 2>&1; then
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            jq --arg v "$NEW_VERSION" '.version = $v' custom_components/shade_dashboard/manifest.json > tmp.json
+            mv tmp.json custom_components/shade_dashboard/manifest.json
+          else
+            NEW_VERSION="$CURRENT"
+          fi
+          echo "new=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add custom_components/shade_dashboard/manifest.json
+          git diff --cached --quiet && echo "No bump needed" || { git commit -m "Bump version to ${{ steps.bump.outputs.new }}"; git push; }
+      - name: Create zip for HACS
+        run: |
+          cd custom_components/shade_dashboard
+          zip -r ../../shade_dashboard.zip . -x "__pycache__/*" "*.pyc"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.new }}
+          name: v${{ steps.bump.outputs.new }}
+          body: |
+            Automated release v${{ steps.bump.outputs.new }}
+
+            Commit: ${{ github.sha }}
+          files: shade_dashboard.zip
+          generate_release_notes: true
