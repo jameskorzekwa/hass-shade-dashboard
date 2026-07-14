@@ -22,6 +22,7 @@ async def test_setup_registers_card_and_panel(hass: HomeAssistant) -> None:
 
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock()
+    hass.config_entries.async_forward_entry_setups = AsyncMock()
 
     with (
         patch("homeassistant.components.frontend.add_extra_js_url") as add_js,
@@ -31,6 +32,8 @@ async def test_setup_registers_card_and_panel(hass: HomeAssistant) -> None:
         ) as reg_panel,
     ):
         assert await async_setup_entry(hass, entry) is True
+
+    hass.config_entries.async_forward_entry_setups.assert_awaited_once()
 
     hass.http.async_register_static_paths.assert_awaited_once()
     add_js.assert_called_once()
@@ -51,6 +54,7 @@ async def test_setup_is_idempotent(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(domain=DOMAIN, data={})
     entry.add_to_hass(hass)
     hass.data[CARD_REGISTERED_KEY] = True
+    hass.config_entries.async_forward_entry_setups = AsyncMock()
 
     with patch("homeassistant.components.panel_custom.async_register_panel", new=AsyncMock()) as reg_panel:
         assert await async_setup_entry(hass, entry) is True
@@ -62,4 +66,5 @@ async def test_unload_entry(hass: HomeAssistant) -> None:
     """Unload always succeeds so the entry can be reloaded."""
     entry = MockConfigEntry(domain=DOMAIN, data={})
     entry.add_to_hass(hass)
+    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
     assert await async_unload_entry(hass, entry) is True
