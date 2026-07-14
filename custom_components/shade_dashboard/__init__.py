@@ -19,7 +19,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, build_panel_config
+from .const import DOMAIN, TRACKER_KEY, build_panel_config
 from .gateway import GatewayTracker
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,7 +34,6 @@ PLATFORMS: list[Platform] = [Platform.COVER]
 CARD_FILENAME = "shade-dashboard-card.js"
 CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
 CARD_REGISTERED_KEY = f"{DOMAIN}_card_registered"
-TRACKER_KEY = f"{DOMAIN}_tracker"
 PANEL_URL_PATH = "shades"
 WEBCOMPONENT_NAME = "shade-dashboard-card"
 
