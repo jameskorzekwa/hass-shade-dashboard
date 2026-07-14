@@ -129,8 +129,11 @@ const roundedPath = (pts, r) => {
 // the 0.45s animation are unchanged. Top glass corners drop to y=4.75/41.9 so the
 // sliced top border reads a true, uniform 3px like the sides and bottom.
 const winAngled = (slot, h) => {
+  // Outer frame corners are rounded (3px, like the rectangle windows); the inner
+  // glass corners stay sharp (r=0) — a 3px border on a 3px radius leaves a square
+  // glass edge, matching the rectangles.
   const outer = roundedPath([[0, 0], [84, 40], [84, h], [0, h]], 3);
-  const inner = roundedPath([[3, 4.75], [81, 41.9], [81, h - 3], [3, h - 3]], 2);
+  const inner = roundedPath([[3, 4.75], [81, 41.9], [81, h - 3], [3, h - 3]], 0);
   return (
     `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:${h}px;cursor:pointer">` +
       `<svg width="84" height="${h}" viewBox="0 0 84 ${h}" style="position:absolute;inset:0;display:block">` +
