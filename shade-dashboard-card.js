@@ -236,8 +236,11 @@ class ShadeDashboardCard extends HTMLElement {
     // the display-ready live value (gateway feed for PowerView, source for RYSE)
     // and their opening/closing state drives the in-motion flash. So the card
     // just reads them. entity_id -> Date.now() at last tap keeps the flash
-    // instant before the cover's state update round-trips back.
+    // instant before the gateway confirms motion (~5s for a scene); _movedSince
+    // marks that the cover has actually started moving, so the flash hands off to
+    // the cover's opening/closing state and stops exactly when the shade stops.
     this._commanded = {};
+    this._movedSince = {};
   }
 
   setConfig(config) {
@@ -292,9 +295,23 @@ class ShadeDashboardCard extends HTMLElement {
   // after a tap so the flash is instant before the cover's state round-trips.
   _isMoving(slot) {
     const st = this._stateObj(slot);
-    if (st && (st.state === "opening" || st.state === "closing")) return true;
     const e = this._entity(slot);
-    return Date.now() - (this._commanded[e] || 0) < 4000;
+    // Once the gateway sees real motion the cover reports opening/closing — hand
+    // the flash off to it and remember it started (so we stop exactly when it does).
+    if (st && (st.state === "opening" || st.state === "closing")) {
+      this._movedSince[e] = true;
+      return true;
+    }
+    // It moved and has now stopped -> done, clear the tap-flash.
+    if (this._movedSince[e]) {
+      delete this._movedSince[e];
+      delete this._commanded[e];
+      return false;
+    }
+    // Just tapped, gateway hasn't confirmed motion yet — keep flashing to bridge
+    // the ~5s gap (a scene takes a few seconds to start). Cleared above the moment
+    // the cover actually moves, so a generous window can't linger past a short move.
+    return Date.now() - (this._commanded[e] || 0) < 12000;
   }
 
   // Flash a shade the instant it's tapped (the cover's opening/closing state
