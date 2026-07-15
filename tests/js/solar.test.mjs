@@ -1,0 +1,67 @@
+// Solar-math tests for the card's sun simulation.
+//
+// Reference azimuth/elevation values were computed independently (NOAA solar
+// position algorithm in Python) and cross-checked against the sun2
+// integration's live sensors for this house on 2026-07-14 (19:53 MDT sensor
+// read: az 293.70 / el 5.4). The card module is imported through a data: URL
+// so Node treats it as ESM without needing a package.json; browser-only
+// registration is skipped via typeof guards inside the module.
+//
+// Run: node --test tests/js
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
+const cardPath = fileURLToPath(
+  new URL("../../custom_components/shade_dashboard/shade-dashboard-card.js", import.meta.url)
+);
+const src = await readFile(cardPath);
+const { solarPos, sunOnWall } = await import(
+  "data:text/javascript;base64," + src.toString("base64")
+);
+
+const LAT = 39.582804;
+const LON = -105.249572;
+const close = (got, want, tol, label) =>
+  assert.ok(Math.abs(got - want) <= tol, `${label}: got ${got.toFixed(2)}, want ${want} ±${tol}`);
+
+test("matches the sun2 sensors at the calibration-photo evening", () => {
+  // 19:53 MDT — sensors read az 293.70 / el 5.4 moments earlier
+  const p = solarPos(Date.UTC(2026, 6, 15, 1, 53), LAT, LON);
+  close(p.az, 293.76, 0.25, "az @19:53");
+  close(p.el, 5.37, 0.25, "el @19:53");
+  // 19:58 MDT — the photo: sun almost exactly on the west wall normal (295)
+  const q = solarPos(Date.UTC(2026, 6, 15, 1, 58), LAT, LON);
+  close(q.az, 294.52, 0.25, "az @photo");
+  close(q.el, 4.52, 0.25, "el @photo");
+});
+
+test("winter solstice noon (south-wall season)", () => {
+  const p = solarPos(Date.UTC(2026, 11, 21, 19, 0), LAT, LON); // 12:00 MST
+  close(p.az, 180.2, 0.3, "az dec noon");
+  close(p.el, 27.0, 0.3, "el dec noon");
+});
+
+test("summer morning sanity", () => {
+  const p = solarPos(Date.UTC(2026, 6, 14, 17, 0), LAT, LON); // 11:00 MDT
+  close(p.az, 114.2, 0.3, "az 11am");
+  close(p.el, 57.6, 0.3, "el 11am");
+});
+
+test("photo projection lands the sun in lower bay 2 (l4), upper glass", () => {
+  // West wall viewer calibrated from the 2026-07-14 19:58 photo.
+  const west = { az: 295.0, viewer_x: 8.34, viewer_d: 18.0, eye_h: 5.4 };
+  const { az, el } = solarPos(Date.UTC(2026, 6, 15, 1, 58), LAT, LON);
+  const p = sunOnWall(west, az, el);
+  assert.equal(p.behind, false);
+  assert.ok(p.x > 5.05 && p.x < 9.2, `x ${p.x.toFixed(2)} within bay 2 (5.05..9.2)`);
+  assert.ok(p.z > 6.2 && p.z < 7.4, `z ${p.z.toFixed(2)} in the upper part of the lower glass`);
+});
+
+test("sun behind a wall is flagged", () => {
+  const west = { az: 295.0, viewer_x: 8.34, viewer_d: 18.0, eye_h: 5.4 };
+  const morning = solarPos(Date.UTC(2026, 6, 14, 14, 0), LAT, LON); // 8:00 MDT, ENE sun
+  assert.equal(sunOnWall(west, morning.az, morning.el).behind, true);
+});

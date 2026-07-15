@@ -157,6 +157,29 @@ SUN: dict[str, str] = {
     "south_lux": "sensor.south_light_level",
 }
 
+# --- Sun simulation geometry -------------------------------------------------
+# Physics for projecting the sun onto the wall elevations (the Sun tab and the
+# live sun dot over the wall drawings). The card computes solar azimuth and
+# elevation for this location (NOAA algorithm, validated against the sun2
+# sensors), then maps it onto a wall with a viewer-eye projection:
+#   x_ft = viewer_x + viewer_d * tan(az - wall_az)
+#   z_ft = eye_h  + viewer_d * tan(el) / cos(az - wall_az)
+# Wall azimuths are the walls' outward normals (true north). The west viewer
+# was calibrated from a photo taken 2026-07-14 19:58 MDT (sun az 294.5 /
+# el 4.5): the sun sat 76% across lower bay 2 (l4), ~15% below its glass top —
+# the seating area is opposite l4, ~18 ft back. Distances are feet; x runs
+# left->right across the window run as seen from inside; z is height above the
+# floor of that wall's storey.
+SUN_GEO: dict = {
+    "lat": 39.582804,
+    "lon": -105.249572,
+    "walls": {
+        "west": {"az": 295.0, "viewer_x": 8.34, "viewer_d": 18.0, "eye_h": 5.4},
+        "south": {"az": 201.0, "viewer_x": 9.5, "viewer_d": 14.0, "eye_h": 5.4},
+        "up_west": {"az": 295.0, "viewer_x": 8.0, "viewer_d": 7.0, "eye_h": 5.4},
+    },
+}
+
 
 def _tracked_entities() -> list[str]:
     """Cover entities on the G3 gateway (everything with live tracking) — i.e.
@@ -226,6 +249,7 @@ def build_panel_config() -> dict:
         "groups": groups,
         "scenes": SCENES,
         "sun": SUN,
+        "sun_geo": SUN_GEO,
         "toggles": TOGGLES,
         "tracked": _tracked_entities(),
         # slots whose shade supports recalibration (PowerView; excludes RYSE mbr1)

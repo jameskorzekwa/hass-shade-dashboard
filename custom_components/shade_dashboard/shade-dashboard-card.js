@@ -74,6 +74,18 @@ const DEFAULT_LAYOUT = {
     west_lux: "sensor.west_light_level",
     south_lux: "sensor.south_light_level",
   },
+  // Physics for the sun simulation (mirror of const.py SUN_GEO). Wall azimuths
+  // are the walls' true-north outward normals; viewer params are the eye point
+  // the projection renders from (feet). Strict JSON — test_layout_sync parses it.
+  sun_geo: {
+    "lat": 39.582804,
+    "lon": -105.249572,
+    "walls": {
+      "west": {"az": 295.0, "viewer_x": 8.34, "viewer_d": 18.0, "eye_h": 5.4},
+      "south": {"az": 201.0, "viewer_x": 9.5, "viewer_d": 14.0, "eye_h": 5.4},
+      "up_west": {"az": 295.0, "viewer_x": 8.0, "viewer_d": 7.0, "eye_h": 5.4}
+    }
+  },
   toggles: {
     movie: { title: "Movie Mode", desc_on: "On · everything closed", desc_off: "Off", entity: "input_boolean.movie_mode" },
     automation: { title: "Auto shades", desc_on: "On · sun & sunset control", desc_off: "Off · manual only", entity: "input_boolean.shade_automation", enable_script: "script.enable_shade_automation", disable_script: "script.disable_shade_automation" },
@@ -158,6 +170,97 @@ const FLASH_CSS = `
   .sd-flash-ring-on { animation: sd-ring-pulse .95s ease-in-out infinite; }
   @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
   .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }`;
+// --- Solar position + wall projection (Sun tab & live sun dot) --------------
+// NOAA solar position algorithm (~0.1 deg). Validated against the sun2
+// integration's sensors for this house (tests/js/solar.test.mjs pins reference
+// values computed independently). Exported so the Node test can import it.
+export function solarPos(dateMs, lat, lon) {
+  const rad = Math.PI / 180;
+  const d = new Date(dateMs);
+  let y = d.getUTCFullYear(), m = d.getUTCMonth() + 1;
+  const day = d.getUTCDate() + (d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600) / 24;
+  if (m <= 2) { y -= 1; m += 12; }
+  const A = Math.floor(y / 100), B = 2 - A + Math.floor(A / 4);
+  const jd = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + day + B - 1524.5;
+  const T = (jd - 2451545.0) / 36525.0;
+  const L0 = (280.46646 + T * (36000.76983 + 0.0003032 * T)) % 360;
+  const M = 357.52911 + T * (35999.05029 - 0.0001537 * T);
+  const e = 0.016708634 - T * (0.000042037 + 0.0000001267 * T);
+  const Mr = M * rad;
+  const C = (1.914602 - T * (0.004817 + 0.000014 * T)) * Math.sin(Mr)
+    + (0.019993 - 0.000101 * T) * Math.sin(2 * Mr) + 0.000289 * Math.sin(3 * Mr);
+  const omega = 125.04 - 1934.136 * T;
+  const lam = (L0 + C - 0.00569 - 0.00478 * Math.sin(omega * rad)) * rad;
+  const eps0 = 23 + (26 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813))) / 60) / 60;
+  const eps = (eps0 + 0.00256 * Math.cos(omega * rad)) * rad;
+  const decl = Math.asin(Math.sin(eps) * Math.sin(lam));
+  const yv = Math.tan(eps / 2) ** 2;
+  const L0r = L0 * rad;
+  const eot = 4 / rad * (yv * Math.sin(2 * L0r) - 2 * e * Math.sin(Mr) + 4 * e * yv * Math.sin(Mr) * Math.cos(2 * L0r)
+    - 0.5 * yv * yv * Math.sin(4 * L0r) - 1.25 * e * e * Math.sin(2 * Mr));
+  const mins = d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60;
+  const tst = (((mins + eot + 4 * lon) % 1440) + 1440) % 1440;
+  const ha = (tst / 4 < 0 ? tst / 4 + 180 : tst / 4 - 180) * rad;
+  const latr = lat * rad;
+  const zen = Math.acos(Math.sin(latr) * Math.sin(decl) + Math.cos(latr) * Math.cos(decl) * Math.cos(ha));
+  let el = 90 - zen / rad;
+  if (el > -0.575 && el < 85) el += (1.02 / Math.tan((el + 10.3 / (el + 5.11)) * rad)) / 60; // refraction
+  let az = Math.acos(((Math.sin(latr) * Math.cos(zen)) - Math.sin(decl)) / (Math.cos(latr) * Math.sin(zen))) / rad;
+  az = ha > 0 ? (180 + az) % 360 : (540 - az) % 360;
+  return { az, el };
+}
+
+// Project the sun onto a wall plane from the configured viewer eye point.
+// Returns wall coordinates in feet (x across the run, z above the floor) and
+// `behind` when the sun is on the other side of the wall plane.
+export function sunOnWall(wall, az, el) {
+  const rad = Math.PI / 180;
+  let d = az - wall.az;
+  d = ((d + 540) % 360) - 180; // normalize to [-180, 180)
+  if (Math.abs(d) >= 88 || el <= -1.5) return { behind: true, rel: d };
+  const x = wall.viewer_x + wall.viewer_d * Math.tan(d * rad);
+  const z = wall.eye_h + (wall.viewer_d * Math.tan(el * rad)) / Math.cos(d * rad);
+  return { x, z, rel: d, behind: false };
+}
+
+// Wall elevations for the Sun tab, in real feet (x: 0 -> run right, z: floor up).
+// West-wall dimensions taken off the calibration photo: 4 bays on a 4.75 ft
+// pitch, lower glass to 8 ft, angled clerestories following the roofline
+// (drops 1.94 ft per bay). South wall mirrors the drawn layout (door bay,
+// chimney bay). Upstairs is schematic: the five west-facing windows.
+const SIM_BAYS = [[0.3, 4.45], [5.05, 9.2], [9.8, 13.95], [14.55, 18.7]];
+const SIM_ROOF = (x) => 18.4 - 0.408 * x; // west roofline: z at wall-x
+const WALL_ELEV = {
+  west: {
+    label: "West wall", az: 295, run: 19, sky: 26, ridge: true,
+    windows: [
+      ...SIM_BAYS.map(([a, b], i) => ({ slot: ["u4", "u5", "u6", "u7"][i], pts: [[a, 9], [a, SIM_ROOF(a)], [b, SIM_ROOF(b)], [b, 9]] })),
+      ...SIM_BAYS.map(([a, b], i) => ({ slot: ["l3", "l4", "l5", "l6"][i], rect: [a, 0.3, b - a, 7.7] })),
+    ],
+  },
+  south: {
+    label: "South wall", az: 201, run: 19, sky: 26,
+    windows: [
+      { slot: "u1", rect: [SIM_BAYS[0][0], 9, 4.15, 9.4] },
+      { slot: "u2", rect: [SIM_BAYS[1][0], 9, 4.15, 9.4] },
+      { slot: "u3", rect: [SIM_BAYS[3][0], 9, 4.15, 9.4] },
+      { slot: "l1", rect: [SIM_BAYS[1][0], 0.3, 4.15, 7.7] },
+      { slot: "l2", rect: [SIM_BAYS[3][0], 0.3, 4.15, 7.7] },
+      { deco: "door", rect: [SIM_BAYS[0][0], 0, 4.15, 6.8] },
+      { deco: "chimney", rect: [SIM_BAYS[2][0], 0, 4.15, 18.5] },
+    ],
+  },
+  up_west: {
+    label: "Upstairs · west-facing", az: 295, run: 16.6, sky: 14, ridge: true,
+    windows: [
+      { slot: "uh1", rect: [0.25, 2, 2.7, 5] }, { slot: "uh2", rect: [3.45, 2, 2.7, 5] }, { slot: "uh3", rect: [6.65, 2, 2.7, 5] },
+      { slot: "ko1", rect: [10.45, 2, 2.7, 5] }, { slot: "ko2", rect: [13.65, 2, 2.7, 5] },
+    ],
+  },
+};
+// Fallback WNW ridge height (deg); normally derived live from the sun2 sunset time.
+const RIDGE_EL_FALLBACK = 2.2;
+
 // SVG path for a rounded polygon (corner radius r) through the given [x,y] points.
 const roundedPath = (pts, r) => {
   const n = pts.length;
@@ -225,6 +328,9 @@ const winAngled = (slot, h) => {
 };
 const angledCol = (slot, h) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winAngled(slot, h)}${label(slot)}</div>`;
+// Live sun dot overlaid on a wall drawing (positioned by _updateSunOverlays).
+const sunDot = (key) =>
+  `<div data-sunov="${key}" style="display:none;position:absolute;left:-100px;top:-100px;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;pointer-events:auto;background:radial-gradient(circle,#FFE0AC 0%,#F0A94F 48%,rgba(240,169,79,0) 74%);box-shadow:0 0 16px 5px rgba(232,163,79,.5);z-index:3"></div>`;
 const chip = (group, text) =>
   `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10px;letter-spacing:1.2px;color:#8A8177;font-weight:600">${text}</span>` +
     `<button data-group="${group}" data-dir="up" title="Open" style="width:30px;height:26px;border:1px solid #DFD7C9;background:#FFFDF9;border-radius:7px;cursor:pointer;font-size:10px;color:#4A4237;padding:0">▲</button>` +
@@ -239,7 +345,11 @@ const toggleRow = (key, t) =>
     `<span data-toggle-switch="${key}" style="flex-shrink:0;width:40px;height:23px;border-radius:999px;background:#D9D2C4;position:relative;transition:background .2s"><span data-toggle-knob="${key}" style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#FFF;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></span>` +
   `</button>`;
 
-class ShadeDashboardCard extends HTMLElement {
+// In Node (tests/js/solar.test.mjs imports this module for the solar math)
+// there is no DOM — stub the base class; HA always provides the real one.
+const BaseElement = typeof HTMLElement !== "undefined" ? HTMLElement : class {};
+
+class ShadeDashboardCard extends BaseElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
@@ -259,6 +369,12 @@ class ShadeDashboardCard extends HTMLElement {
     // the cover's opening/closing state and stops exactly when the shade stops.
     this._commanded = {};
     this._movedSince = {};
+    // Sun simulation state: live follows the clock until scrubbed/played.
+    this._simLive = true;
+    this._simPlaying = false;
+    this._simSeason = "today";
+    this._simMin = 720;
+    this._simStaticKey = null;
   }
 
   setConfig(config) {
@@ -351,9 +467,11 @@ class ShadeDashboardCard extends HTMLElement {
     } catch (_e) { /* CSP may block; system font fallback is fine */ }
     const mobile = this._isMobile();
     this._builtMobile = mobile;
-    // Keep _tab valid for the layout being built (panels differ per layout).
-    if (mobile && this._tab !== "settings") this._tab = "home";
+    // Keep _tab valid for the layout being built (panels differ per layout;
+    // "settings" and "sun" exist in both).
+    if (mobile && this._tab !== "settings" && this._tab !== "sun") this._tab = "home";
     if (!mobile && this._tab === "home") this._tab = "main";
+    this._simStaticKey = null; // template rebuilt -> redraw the sim walls
     this.shadowRoot.innerHTML = mobile ? this._mobileTemplate() : this._template();
     this._built = true;
     this._wire();
@@ -415,13 +533,263 @@ class ShadeDashboardCard extends HTMLElement {
         .join("");
   }
 
+  // --- Sun simulation (Sun tab) ---------------------------------------------
+  // Real solar geometry projected onto scale elevations of the walls: today's
+  // sun path (+ a Dec 21 ghost for seasonal contrast), the WNW ridge line, and
+  // a scrubbable/playable sun. All angles come from solarPos() for the house
+  // lat/lon; the wall projection is calibrated from the 2026-07-14 19:58 photo.
+  _geoWalls() {
+    return (this._layout.sun_geo && this._layout.sun_geo.walls) || {};
+  }
+  _geoLatLon() {
+    const g = this._layout.sun_geo || {};
+    return [g.lat, g.lon];
+  }
+  // WNW ridge height: the sun's elevation at the sun2 (terrain-corrected)
+  // sunset instant — i.e. how high the mountains it sets behind are.
+  _ridgeEl() {
+    const [lat, lon] = this._geoLatLon();
+    const ms = this._sunTime((this._layout.sun || {}).setting_entity);
+    if (ms == null || lat == null) return RIDGE_EL_FALLBACK;
+    const el = solarPos(ms, lat, lon).el;
+    return el > 0 && el < 8 ? el : RIDGE_EL_FALLBACK;
+  }
+  _simDate(minutes) {
+    const now = new Date();
+    const MONTH = { jun: [5, 21], sep: [8, 21], dec: [11, 21] };
+    const md = MONTH[this._simSeason];
+    const base = md ? new Date(now.getFullYear(), md[0], md[1]) : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    base.setMinutes(minutes);
+    return base;
+  }
+  _fmtMin(min) {
+    const h = Math.floor(min / 60) % 24, m = Math.round(min % 60);
+    const hh = ((h + 11) % 12) + 1;
+    return `${hh}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  }
+  _sunSimHtml() {
+    const wallBox = (key) => {
+      const w = WALL_ELEV[key];
+      return `<div style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:4px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-weight:700;font-size:13px">${w.label}</span><span style="font-size:11px;color:#8A8177">faces ${w.az}°</span></div>
+        <svg data-sim-svg="${key}" viewBox="-1 0 ${w.run + 2} ${w.sky + 0.8}" style="width:100%;height:auto;display:block;background:#FBF8F2;border:1px solid #E2DACB;border-radius:12px"></svg>
+        <div data-sim-note="${key}" style="font-size:11px;color:#8A8177;text-align:center;min-height:15px"></div>
+      </div>`;
+    };
+    return `
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button data-sim-play title="Play the day" style="width:38px;height:38px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-size:15px;cursor:pointer">▶</button>
+        <input data-sim-scrub type="range" min="270" max="1290" step="2" style="flex:1;min-width:130px">
+        <span data-sim-time style="font:600 13px ui-monospace,Menlo,monospace;min-width:66px;text-align:right"></span>
+        <span data-sim-pos style="font-size:11px;color:#8A8177;min-width:120px"></span>
+        <button data-sim-now style="padding:9px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer">Now</button>
+        <select data-sim-season style="padding:8px 10px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
+          <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
+        </select>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">${wallBox("west")}${wallBox("south")}${wallBox("up_west")}</div>
+      <div style="font-size:11px;color:#8A8177">━ sun path (${"selected day"}) · ┄ Dec 21 · ╌ mountain ridge · dots mark whole hours · positions as seen from the seating area</div>`;
+  }
+  // Sample a day's sun track projected onto one wall; returns on-canvas segments.
+  _simTrack(wallKey, dayBase) {
+    const [lat, lon] = this._geoLatLon();
+    const geo = this._geoWalls()[wallKey];
+    const elev = WALL_ELEV[wallKey];
+    if (!geo || lat == null) return { segs: [], ticks: [] };
+    const segs = [], ticks = [];
+    let cur = null;
+    for (let min = 270; min <= 1290; min += 6) {
+      const t = new Date(dayBase.getFullYear(), dayBase.getMonth(), dayBase.getDate());
+      t.setMinutes(min);
+      const { az, el } = solarPos(t.getTime(), lat, lon);
+      const p = el > -1 ? sunOnWall(geo, az, el) : { behind: true };
+      const ok = !p.behind && Math.abs(p.rel) < 75 && p.x > -1 && p.x < elev.run + 1 && p.z > -0.4 && p.z < elev.sky - 0.5;
+      if (ok) {
+        (cur || segs[segs.push(cur = []) - 1]).push([p.x, p.z]);
+        if (min % 60 === 0) ticks.push({ x: p.x, z: p.z, h: min / 60 });
+      } else cur = null;
+    }
+    return { segs, ticks };
+  }
+  _drawSimWall(key, dayBase, ridge) {
+    const w = WALL_ELEV[key];
+    const Y = (z) => w.sky - z; // feet -> svg y (z up, y down)
+    const seg2path = (s) => "M" + s.map(([x, z]) => `${x.toFixed(2)},${Y(z).toFixed(2)}`).join("L");
+    let out = `<line x1="-1" y1="${Y(0)}" x2="${w.run + 1}" y2="${Y(0)}" stroke="#CDC3B2" stroke-width=".1"/>`;
+    for (const win of w.windows) {
+      if (win.deco === "chimney") { out += `<rect x="${win.rect[0]}" y="${Y(win.rect[1] + win.rect[3])}" width="${win.rect[2]}" height="${win.rect[3]}" fill="#D3CCBE"/>`; continue; }
+      if (win.deco === "door") { out += `<rect x="${win.rect[0]}" y="${Y(win.rect[1] + win.rect[3])}" width="${win.rect[2]}" height="${win.rect[3]}" fill="#4A423A" opacity=".6" rx=".1"/>`; continue; }
+      const shape = win.rect
+        ? `<rect x="${win.rect[0]}" y="${Y(win.rect[1] + win.rect[3])}" width="${win.rect[2]}" height="${win.rect[3]}" fill="#DCE3E4" stroke="#1F1B17" stroke-width=".18"/>`
+        : `<polygon points="${win.pts.map(([x, z]) => `${x},${Y(z).toFixed(2)}`).join(" ")}" fill="#D3DCE0" stroke="#1F1B17" stroke-width=".18"/>`;
+      out += shape;
+      if (win.slot && win.rect && win.rect[1] < 8.5) out += `<text x="${win.rect[0] + win.rect[2] / 2}" y="${Y(-0.75)}" text-anchor="middle" font-size=".78" fill="#8A8177" font-family="ui-monospace,Menlo,monospace">${win.slot}</text>`;
+    }
+    const geo = this._geoWalls()[key];
+    if (w.ridge && geo) {
+      const zr = geo.eye_h + geo.viewer_d * Math.tan((ridge * Math.PI) / 180);
+      out += `<line x1="-1" y1="${Y(zr).toFixed(2)}" x2="${w.run + 1}" y2="${Y(zr).toFixed(2)}" stroke="#9C9484" stroke-width=".09" stroke-dasharray=".6 .45"/><text x="${w.run + 0.9}" y="${Y(zr + 0.35).toFixed(2)}" text-anchor="end" font-size=".7" fill="#9C9484">ridge</text>`;
+    }
+    // Dec 21 ghost (seasonal contrast) under today's path
+    if (this._simSeason !== "dec") {
+      const dec = this._simTrack(key, new Date(new Date().getFullYear(), 11, 21));
+      out += dec.segs.map((s) => `<path d="${seg2path(s)}" fill="none" stroke="#8A93B8" stroke-width=".14" stroke-dasharray=".5 .4" opacity=".75"/>`).join("");
+      const first = dec.segs[0] && dec.segs[0][0];
+      if (first) out += `<text x="${first[0] + 0.3}" y="${Y(first[1] + 0.5).toFixed(2)}" font-size=".7" fill="#8A93B8">Dec 21</text>`;
+    }
+    const day = this._simTrack(key, dayBase);
+    out += day.segs.map((s) => `<path d="${seg2path(s)}" fill="none" stroke="#C67B3B" stroke-width=".16" opacity=".85"/>`).join("");
+    for (const t of day.ticks) {
+      out += `<circle cx="${t.x.toFixed(2)}" cy="${Y(t.z).toFixed(2)}" r=".17" fill="#C67B3B"/><text x="${t.x.toFixed(2)}" y="${Y(t.z + 0.65).toFixed(2)}" text-anchor="middle" font-size=".68" fill="#A08B72">${((t.h + 11) % 12) + 1}${t.h < 12 ? "a" : "p"}</text>`;
+    }
+    out += `<g data-sim-dot style="display:none">
+      <circle r="1.05" fill="#F0A94F" opacity=".14"/><circle r=".62" fill="#F0A94F" opacity=".3"/>
+      <circle r=".36" fill="#F3B25C"/><circle r=".22" fill="#E8963C"/>
+    </g>`;
+    return { svg: out, hasToday: day.segs.length > 0 };
+  }
+  _updateSunSim() {
+    const root = this.shadowRoot;
+    if (!root || !root.querySelector("[data-sim-svg]")) return;
+    const [lat, lon] = this._geoLatLon();
+    if (lat == null) return;
+    if (this._simLive) {
+      const n = new Date();
+      this._simMin = n.getHours() * 60 + n.getMinutes();
+    }
+    const min = Math.min(1290, Math.max(270, this._simMin));
+    const dayBase = this._simDate(0);
+    const ridge = this._ridgeEl();
+    const staticKey = `${this._simSeason}|${dayBase.toDateString()}|${ridge.toFixed(2)}`;
+    if (this._simStaticKey !== staticKey) {
+      this._simStaticKey = staticKey;
+      for (const key of Object.keys(WALL_ELEV)) {
+        const svg = root.querySelector(`[data-sim-svg="${key}"]`);
+        if (!svg) continue;
+        const drawn = this._drawSimWall(key, dayBase, ridge);
+        svg.innerHTML = drawn.svg;
+        svg._hasToday = drawn.hasToday;
+      }
+    }
+    const t = this._simDate(min);
+    const { az, el } = solarPos(t.getTime(), lat, lon);
+    const scrub = root.querySelector("[data-sim-scrub]");
+    if (scrub && !this._simScrubbing) scrub.value = String(min);
+    const timeEl = root.querySelector("[data-sim-time]");
+    if (timeEl) timeEl.textContent = this._fmtMin(min);
+    const posEl = root.querySelector("[data-sim-pos]");
+    if (posEl) posEl.textContent = el > -1 ? `az ${az.toFixed(0)}° · el ${el.toFixed(1)}°` : "sun below horizon";
+    const playBtn = root.querySelector("[data-sim-play]");
+    if (playBtn) playBtn.textContent = this._simPlaying ? "⏸" : "▶";
+    for (const key of Object.keys(WALL_ELEV)) {
+      const svg = root.querySelector(`[data-sim-svg="${key}"]`);
+      const note = root.querySelector(`[data-sim-note="${key}"]`);
+      if (!svg) continue;
+      const dot = svg.querySelector("[data-sim-dot]");
+      const w = WALL_ELEV[key];
+      const geo = this._geoWalls()[key];
+      const p = geo && el > -0.9 ? sunOnWall(geo, az, el) : { behind: true };
+      let noteTxt = "";
+      if (el <= -0.9) noteTxt = "Night — sun below the horizon";
+      else if (p.behind) noteTxt = "Sun is behind this wall";
+      else if (w.ridge && el < ridge - 0.25) noteTxt = "Sun set behind the ridge";
+      if (dot) {
+        if (!p.behind && el > -0.9 && !(w.ridge && el < ridge - 0.25) && p.x > -1 && p.x < w.run + 1) {
+          const clamped = p.z > w.sky - 0.7;
+          const z = clamped ? w.sky - 0.7 : Math.max(-0.3, p.z);
+          dot.style.display = "";
+          dot.style.opacity = clamped ? "0.45" : "1";
+          dot.setAttribute("transform", `translate(${p.x.toFixed(2)},${(w.sky - z).toFixed(2)})`);
+          if (clamped) noteTxt = `Sun is above these windows (el ${el.toFixed(0)}°)`;
+        } else dot.style.display = "none";
+      }
+      if (note) note.textContent = noteTxt || (svg._hasToday === false ? "No direct sun on this glass today — see the Dec 21 path" : "");
+    }
+  }
+  _wireSim() {
+    const root = this.shadowRoot;
+    const scrub = root.querySelector("[data-sim-scrub]");
+    if (!scrub) return;
+    const seasonSel = root.querySelector("[data-sim-season]");
+    scrub.addEventListener("input", () => {
+      this._simLive = false;
+      this._simScrubbing = true;
+      this._simMin = Number(scrub.value);
+      this._updateSunSim();
+      this._simScrubbing = false;
+    });
+    root.querySelector("[data-sim-now]").addEventListener("click", () => {
+      this._simLive = true;
+      this._simPlaying = false;
+      this._simSeason = "today";
+      if (seasonSel) seasonSel.value = "today";
+      this._updateSunSim();
+    });
+    if (seasonSel) seasonSel.addEventListener("change", () => {
+      this._simSeason = seasonSel.value;
+      if (this._simSeason !== "today") this._simLive = false;
+      this._updateSunSim();
+    });
+    root.querySelector("[data-sim-play]").addEventListener("click", () => {
+      this._simPlaying = !this._simPlaying;
+      if (this._simPlaying) {
+        this._simLive = false;
+        if (this._simMin >= 1288) this._simMin = 270; // restart from dawn
+        const step = () => {
+          if (!this._simPlaying || !this.isConnected) return;
+          this._simMin += 1.6;
+          if (this._simMin >= 1290) { this._simMin = 1290; this._simPlaying = false; }
+          this._updateSunSim();
+          if (this._simPlaying) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }
+      this._updateSunSim();
+    });
+  }
+  // Live sun dot over the interactive wall drawings (desktop tabs). Maps the
+  // sun2 sensor az/el through the same projection, then anchors feet -> pixels
+  // on two known window edges so it adapts to the drawn layout automatically.
+  _updateSunOverlays(az, el) {
+    const root = this.shadowRoot;
+    if (!root || !root.querySelector("[data-sunov]")) return;
+    const ridge = this._ridgeEl();
+    const ANCHORS = {
+      west: { wall: "west", left: ["l3", 0.3], right: ["l6", 18.7], top: ["u4", 18.39], bot: ["l3", 0.3] },
+      south: { wall: "south", left: ["u1", 0.3], right: ["u3", 18.7], top: ["u1", 18.4], bot: ["l1", 0.3] },
+      uphall: { wall: "up_west", left: ["uh1", 0.25], right: ["uh3", 9.35], top: ["uh1", 7.0], bot: ["uh1", 2.0] },
+      office: { wall: "up_west", left: ["ko1", 10.45], right: ["ko2", 16.35], top: ["ko1", 7.0], bot: ["ko1", 2.0] },
+    };
+    for (const [key, a] of Object.entries(ANCHORS)) {
+      const ov = root.querySelector(`[data-sunov="${key}"]`);
+      if (!ov) continue;
+      const geo = this._geoWalls()[a.wall];
+      const w = WALL_ELEV[a.wall];
+      const p = geo && az != null && el != null && el > -0.5 ? sunOnWall(geo, az, el) : { behind: true };
+      const blocked = p.behind || (w && w.ridge && el < ridge - 0.25)
+        || p.x < a.left[1] - 1.2 || p.x > a.right[1] + 1.2 || p.z < a.bot[1] - 1.2 || p.z > a.top[1] + 1.6;
+      if (blocked) { ov.style.display = "none"; continue; }
+      const box = ov.parentElement.getBoundingClientRect();
+      const rect = (slot) => { const elx = root.querySelector(`[data-slot="${slot}"]`); return elx && elx.getBoundingClientRect(); };
+      const L = rect(a.left[0]), R = rect(a.right[0]), T = rect(a.top[0]), Bo = rect(a.bot[0]);
+      if (!L || !R || !T || !Bo || !box.width) { ov.style.display = "none"; continue; }
+      const xPx = L.left + ((p.x - a.left[1]) / (a.right[1] - a.left[1])) * (R.right - L.left);
+      const yPx = Bo.bottom - ((p.z - a.bot[1]) / (a.top[1] - a.bot[1])) * (Bo.bottom - T.top);
+      ov.style.display = "block";
+      ov.style.left = `${(((xPx - box.left) / box.width) * 100).toFixed(2)}%`;
+      ov.style.top = `${(((yPx - box.top) / box.height) * 100).toFixed(2)}%`;
+      ov.title = `Sun · az ${az.toFixed(0)}° el ${el.toFixed(1)}°`;
+    }
+  }
+
   _template() {
     const sc = this._layout.scenes;
     const tg = this._layout.toggles || {};
     // South wall: three columns against the chimney
     const south =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
-        `<div style="display:flex;align-items:stretch;gap:14px">` +
+        `<div style="position:relative;display:flex;align-items:stretch;gap:14px">` +
+          sunDot("south") +
           // col 1: upper 1 over the front door
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">` +
             lowerCol("u1", GLASS_UPPER) +
@@ -441,7 +809,8 @@ class ShadeDashboardCard extends HTMLElement {
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
         // gap sized so the angled uppers' bottoms line up with the south-wall uppers'
         // bottoms (the angled columns now include a label row below each window)
-        `<div style="display:flex;flex-direction:column;gap:48px;align-items:center">` +
+        `<div style="position:relative;display:flex;flex-direction:column;gap:48px;align-items:center">` +
+          sunDot("west") +
           `<div style="display:flex;align-items:flex-end;gap:14px">${angledCol("u4", 190)}${angledCol("u5", 150)}${angledCol("u6", 110)}${angledCol("u7", 70)}</div>` +
           `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("l3")}${lowerCol("l4")}${lowerCol("l5")}${lowerCol("l6")}</div>` +
         `</div>` +
@@ -467,13 +836,13 @@ class ShadeDashboardCard extends HTMLElement {
     const upHall =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
         `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">UPSTAIRS HALLWAY</span>` +
-        `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("uh1")}${divider()}${lowerCol("uh2")}${lowerCol("uh3")}</div>` +
+        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${sunDot("uphall")}${lowerCol("uh1")}${divider()}${lowerCol("uh2")}${lowerCol("uh3")}</div>` +
         chip("upstairs_hallway", "ALL HALLWAY") +
       `</div>`;
     const office =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
         `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">KYLE'S OFFICE</span>` +
-        `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
+        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${sunDot("office")}${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
         chip("office", "ALL OFFICE") +
       `</div>`;
 
@@ -509,6 +878,7 @@ class ShadeDashboardCard extends HTMLElement {
     <div style="display:flex;gap:8px;align-items:center">
       <button data-tab="main" class="pill">Main Floor</button>
       <button data-tab="up" class="pill">Upstairs</button>
+      <button data-tab="sun" class="pill">Sun</button>
       <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:17px">⚙</button>
     </div>
 
@@ -532,6 +902,11 @@ class ShadeDashboardCard extends HTMLElement {
       <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:48px">
         ${mainBedroom}${divider()}${upHall}${divider()}${office}
       </div>
+    </div>
+
+    <div data-panel="sun" style="flex-direction:column;gap:12px;flex:1;min-height:0;overflow-y:auto">
+      <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Sun</span><span style="font-size:12px;color:#8A8177">Where the sun crosses your windows — real solar geometry for this house</span></div>
+      ${this._sunSimHtml()}
     </div>
 
     <div data-panel="settings" style="flex-direction:column;gap:8px;flex:1;min-height:0">
@@ -594,7 +969,10 @@ class ShadeDashboardCard extends HTMLElement {
 <div class="mframe">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;flex-shrink:0">
     <div><div style="font-size:20px;font-weight:700">Shades</div><div data-summary style="font-size:11px;color:#8A8177;margin-top:1px"></div></div>
-    <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">⚙</button>
+    <div style="display:flex;gap:8px">
+      <button data-tab="sun" title="Sun simulation" aria-label="Sun simulation" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">☀</button>
+      <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">⚙</button>
+    </div>
   </div>
 
   <div data-panel="home" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:flex;flex-direction:column;gap:14px">
@@ -603,6 +981,12 @@ class ShadeDashboardCard extends HTMLElement {
     ${SECTIONS.map(section).join("")}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:4px">MODES</div>
     ${Object.keys(tg).map((k) => toggleRow(k, tg[k])).join("")}
+  </div>
+
+  <div data-panel="sun" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:none;flex-direction:column;gap:12px">
+    <button data-tab="home" style="align-self:flex-start;padding:9px 16px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:13px;color:#26211B;cursor:pointer">← Back</button>
+    <div style="font-size:18px;font-weight:700">Sun</div>
+    ${this._sunSimHtml()}
   </div>
 
   <div data-panel="settings" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:none;flex-direction:column;gap:10px">
@@ -638,6 +1022,8 @@ class ShadeDashboardCard extends HTMLElement {
     root.querySelectorAll("[data-tab]").forEach((el) =>
       el.addEventListener("click", () => { this._tab = el.getAttribute("data-tab"); this._update(); })
     );
+    // sun simulation controls (scrubber/play/now/season)
+    this._wireSim();
     // group chips + floor buttons
     root.querySelectorAll("[data-group]").forEach((el) =>
       el.addEventListener("click", () => this._group(el.getAttribute("data-group"), el.getAttribute("data-dir")))
@@ -982,6 +1368,9 @@ class ShadeDashboardCard extends HTMLElement {
       else text = "Midday · sun high south";
       labelEl.textContent = text;
     }
+    // Sun tab + the live sun dot over the wall drawings ride the same tick.
+    this._updateSunSim();
+    this._updateSunOverlays(az, elev);
   }
 
   _updateBar() {
@@ -1045,15 +1434,18 @@ class ShadeDashboardCard extends HTMLElement {
   }
 }
 
-customElements.define("shade-dashboard-card", ShadeDashboardCard);
+// Browser-only registration (skipped when imported by the Node solar test).
+if (typeof customElements !== "undefined") {
+  customElements.define("shade-dashboard-card", ShadeDashboardCard);
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "shade-dashboard-card",
-  name: "Shade Dashboard",
-  description: "Spatial PowerView shade control dashboard",
-  preview: false,
-});
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: "shade-dashboard-card",
+    name: "Shade Dashboard",
+    description: "Spatial PowerView shade control dashboard",
+    preview: false,
+  });
 
-// eslint-disable-next-line no-console
-console.info("%c SHADE-DASHBOARD-CARD %c loaded ", "background:#26211B;color:#F5F1EA;border-radius:3px 0 0 3px;padding:2px 4px", "background:#C67B3B;color:#fff;border-radius:0 3px 3px 0;padding:2px 4px");
+  // eslint-disable-next-line no-console
+  console.info("%c SHADE-DASHBOARD-CARD %c loaded ", "background:#26211B;color:#F5F1EA;border-radius:3px 0 0 3px;padding:2px 4px", "background:#C67B3B;color:#fff;border-radius:0 3px 3px 0;padding:2px 4px");
+}

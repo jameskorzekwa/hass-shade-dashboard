@@ -47,6 +47,11 @@ jobs:
           pip install -r requirements_test.txt
       - name: Run tests with coverage
         run: pytest tests/ -v --tb=short --cov=custom_components --cov-report=term-missing
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Solar math tests (card JS)
+        run: node --test tests/js/solar.test.mjs
 
   validate:
     name: Validate
