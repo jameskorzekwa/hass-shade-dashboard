@@ -120,16 +120,24 @@ function fireEvent(node, type, detail) {
 }
 
 // --- static DOM builders (styles mirror the design prototype) ----------------
-const fabric = (slot, hem) =>
-  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease"></div>`;
+const fabric = (slot, hem, glow) =>
+  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease">` +
+    (glow ? `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` : "") +
+  `</div>`;
 const offline = (slot) =>
   `<div data-offline="${slot}" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:${HATCH}"><span style="writing-mode:vertical-rl;font:700 10px ui-monospace,Menlo,monospace;letter-spacing:2px;color:#A2988A">OFFLINE</span></div>`;
 const flash = (slot, clip) =>
   `<div data-flash="${slot}" class="sd-flash-ov" style="${clip ? `clip-path:url(#sd-clip-${slot})` : "border-radius:3px"}"></div>`;
 const sunUnder = (slot) => `<div data-sunlit="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
-const sunOver = (slot) => `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
+// Linear mix of two #RRGGBB colors (t: 0 -> a, 1 -> b), for the sky tint.
+// Returns #RRGGBB so mixes can be chained (rgb() output broke the 2nd parse).
+const hexMix = (a, b, t) => {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (sh) => Math.round(((pa >> sh) & 255) + (((pb >> sh) & 255) - ((pa >> sh) & 255)) * t);
+  return `#${((1 << 24) + (ch(16) << 16) + (ch(8) << 8) + ch(0)).toString(16).slice(1)}`;
+};
 const winRect = (slot, glass) =>
-  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4)}${sunOver(slot)}${flash(slot)}${offline(slot)}</div>`;
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
 const label = (slot) =>
   `<span data-label="${slot}" style="font:700 13px ui-monospace,Menlo,monospace;color:#6E6558;letter-spacing:.3px"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
@@ -315,8 +323,9 @@ const winAngled = (slot, h) => {
       // windows) instead of being clipped away.
       `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
         sunUnder(slot) +
-        `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease"></div>` +
-        sunOver(slot) +
+        `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
+          `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` +
+        `</div>` +
       `</div>` +
       flash(slot, true) +
     `</div>`
@@ -618,22 +627,103 @@ class ShadeDashboardCard extends BaseElement {
         const dist = Math.hypot(p.x - nx, p.z - nz);
         const I = Math.max(0, 1 - dist / 7) ** 1.15 * dayFade;
         if (I > 0.02) {
-          const cx = (((p.x - g.x1) / (g.x2 - g.x1)) * 100).toFixed(1);
-          const cy = (((g.z2 - p.z) / (g.z2 - g.z1)) * 100).toFixed(1);
+          const cx = ((p.x - g.x1) / (g.x2 - g.x1)) * 100;
+          const cy = ((g.z2 - p.z) / (g.z2 - g.z1)) * 100;
           const pxFt = w / (g.x2 - g.x1);
           const R = 8 * pxFt, core = 1.2 * pxFt;
-          const grad = (a) =>
-            `radial-gradient(circle ${R.toFixed(0)}px at ${cx}% ${cy}%,` +
-            `rgba(255,248,225,${(0.95 * a).toFixed(3)}) 0,` +
-            `rgba(255,228,160,${(0.85 * a).toFixed(3)}) ${core.toFixed(0)}px,` +
-            `rgba(255,200,120,${(0.5 * a).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
+          css =
+            `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
+            `rgba(255,248,225,${(0.95 * I).toFixed(3)}) 0,` +
+            `rgba(255,228,160,${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
+            `rgba(255,200,120,${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
             `rgba(255,185,105,0) ${R.toFixed(0)}px)`;
-          css = grad(I);
-          cssOver = grad(I * 0.32); // the soft glow that bleeds through closed fabric
+          // Light leaking around a closed shade: bright slivers down the frame
+          // sides (the side nearer the sun leaks hardest), a seep line above
+          // the hem, a whisper at the top gap, and a faint wash through the
+          // weave. The glow layer is a child of the fabric, so it exactly
+          // covers the shaded region at any position — the sun-lit glass
+          // below a half-drawn shade comes from the under layer instead.
+          const pos = this._dispPos(slot);
+          const covered = pos == null ? 1 : (100 - pos) / 100;
+          if (covered > 0.02) {
+            const tL = Math.max(0, 1 - Math.abs(p.x - g.x1) / 5);
+            const tR = Math.max(0, 1 - Math.abs(p.x - g.x2) / 5);
+            const aL = Math.min(1, 1.35 * I * (0.3 + 0.9 * tL));
+            const aR = Math.min(1, 1.35 * I * (0.3 + 0.9 * tR));
+            const edge = (deg, a) =>
+              `linear-gradient(${deg}deg,rgba(255,242,204,${a.toFixed(3)}) 0,rgba(255,240,198,${(a * 0.55).toFixed(3)}) 3px,rgba(255,240,198,0) 14px)`;
+            // radial center in the glow layer's own (covered-region) coords
+            const cyGlow = cy / Math.max(covered, 0.05);
+            cssOver = [
+              edge(0, Math.min(1, 0.95 * I)),   // hem seep (bottom of the fabric)
+              edge(90, aL),        // left frame sliver
+              edge(270, aR),       // right frame sliver
+              edge(180, 0.45 * I), // top gap
+              `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cyGlow.toFixed(1)}%,` +
+              `rgba(255,236,182,${(0.3 * I).toFixed(3)}) 0,` +
+              `rgba(255,214,142,${(0.22 * I).toFixed(3)}) ${(R * 0.4).toFixed(0)}px,` +
+              `rgba(255,200,120,0) ${R.toFixed(0)}px)`,
+            ].join(",");
+          }
         }
       }
       if (under) under.style.background = css;
       if (over) over.style.background = cssOver;
+    }
+  }
+  // Sky outside the windows: the glass gradients tint continuously with the
+  // sun — deep blue-grey night, a warm horizon glow at dawn/dusk on the walls
+  // facing the sun, and the normal bright glass by day. Desktop only (the
+  // phone layout keeps its static tiles). Live updates step minute-by-minute,
+  // so the change reads as a slow drift; in test-play it animates smoothly.
+  _updateSky(az, el) {
+    const root = this.shadowRoot;
+    if (!root || this._builtMobile) return;
+    const sm = (x, a, b) => Math.min(1, Math.max(0, (x - a) / (b - a)));
+    const elv = el == null ? 30 : el; // sensors missing -> daytime look
+    const night = 1 - sm(elv, -9, -1);
+    const glow = Math.exp(-Math.pow(elv - 1, 2) / 16); // horizon bell around el ~1
+    const walls = this._geoWalls();
+    const rad = Math.PI / 180;
+    const mk = (facing) => {
+      const warm = glow * (0.15 + 0.85 * facing) * (1 - night * 0.85);
+      let uTop = hexMix("#CBD6DC", "#39445A", night), uBot = hexMix("#E2E2D6", "#4A5468", night);
+      let lTop = hexMix("#D8DFE2", "#39445A", night), lMid = hexMix("#E9E6DB", "#4A5468", night);
+      let lBot = hexMix("#A8B29B", "#3B443C", night);
+      uTop = hexMix(uTop, "#D9AF9B", warm * 0.35); uBot = hexMix(uBot, "#F2BE7F", warm * 0.85);
+      lTop = hexMix(lTop, "#D9AF9B", warm * 0.45); lMid = hexMix(lMid, "#F2BE7F", warm * 0.9);
+      lBot = hexMix(lBot, "#C9A176", warm * 0.5);
+      return {
+        upper: `linear-gradient(180deg,${uTop} 0%,${uBot} 100%)`,
+        lower: `linear-gradient(180deg,${lTop} 0%,${lMid} 55%,${lBot} 100%)`,
+        uTop, uBot,
+      };
+    };
+    const cache = {};
+    const skyFor = (slot) => {
+      const wallKey = SLOT_GLASS[slot] ? SLOT_GLASS[slot].wall : "_neutral";
+      if (!cache[wallKey]) {
+        let facing = 0.25; // unknown-orientation panes get the neutral twilight
+        const wall = walls[wallKey];
+        if (wall && az != null) {
+          const d = ((az - wall.az + 540) % 360) - 180;
+          facing = Math.max(0, Math.cos(d * rad));
+        }
+        cache[wallKey] = mk(facing);
+      }
+      return cache[wallKey];
+    };
+    for (const slot of Object.keys(this._layout.shades)) {
+      const win = root.querySelector(`[data-slot="${slot}"]`);
+      if (!win) continue;
+      const sky = skyFor(slot);
+      const stops = win.querySelectorAll(`#sd-g-${slot} stop`); // angled clerestories (SVG)
+      if (stops.length === 2) {
+        stops[0].setAttribute("stop-color", sky.uTop);
+        stops[1].setAttribute("stop-color", sky.uBot);
+      } else {
+        win.style.background = /^u\d/.test(slot) ? sky.upper : sky.lower;
+      }
     }
   }
   // Hidden test controls (Settings tab): scrub/play the sun through a day.
@@ -1269,8 +1359,9 @@ class ShadeDashboardCard extends BaseElement {
       else text = "Midday · sun high south";
       labelEl.textContent = text;
     }
-    // The per-window sunlight rides the same tick.
+    // The per-window sunlight + outside sky ride the same tick.
     this._updateSunLight(az, elev);
+    this._updateSky(az, elev);
   }
 
   _updateBar() {
