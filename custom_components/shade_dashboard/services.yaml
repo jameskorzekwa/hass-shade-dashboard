@@ -36,3 +36,13 @@ move_group:
           min: 0
           max: 100
           unit_of_measurement: "%"
+    verify:
+      name: Verify arrival
+      description: >-
+        Confirm the shades actually reached the target; re-drive any that didn't
+        (one retry) and raise a notification if they still fail. Use for
+        automations; the dashboard leaves this off for instant feedback.
+      required: false
+      default: false
+      selector:
+        boolean:

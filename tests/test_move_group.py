@@ -9,8 +9,30 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.shade_dashboard import _async_move_group
-from custom_components.shade_dashboard.const import DOMAIN, SHADES, TRACKER_KEY, abstract_entity
+from custom_components.shade_dashboard.const import (
+    DOMAIN,
+    MOVE_FAILED_EVENT,
+    SHADES,
+    TRACKER_KEY,
+    abstract_entity,
+)
 from custom_components.shade_dashboard.gateway import GatewayTracker
+
+
+def _verify_tracker(available: bool = True) -> GatewayTracker:
+    t = _tracker()
+    t._entity_to_id = {"cover.a": 1, "cover.b": 2}
+    t.hass = MagicMock()
+    t.hass.states.get.return_value = None if available else _unavail()
+    t.hass.services.async_call = AsyncMock()
+    t._put_positions = AsyncMock(return_value=True)
+    return t
+
+
+def _unavail():
+    m = MagicMock()
+    m.state = "unavailable"
+    return m
 
 
 def _tracker() -> GatewayTracker:
@@ -113,3 +135,65 @@ async def test_move_group_service_is_awaited_end_to_end(hass: HomeAssistant) -> 
     sources, primary = tracker.async_move_group.await_args.args
     assert sources == [SHADES["ko1"]]
     assert primary == 1.0
+
+
+async def test_verified_move_success_no_notify() -> None:
+    """All shades within tolerance of target -> no retry, no notification."""
+    t = _verify_tracker()
+    t._wait_settled = AsyncMock(return_value={1: 100, 2: 98})  # both ~open (target 100)
+    failed = await t.async_move_group_verified(["cover.a", "cover.b"], 1.0)
+    assert failed == []
+    assert t._put_positions.await_count == 1  # no retry
+    t.hass.services.async_call.assert_not_awaited()  # no notification
+
+
+async def test_verified_move_straggler_recovers_on_retry() -> None:
+    """A shade that missed the first move but arrives on the retry -> success."""
+    t = _verify_tracker()
+    t._wait_settled = AsyncMock(side_effect=[{1: 100, 2: 40}, {1: 100, 2: 99}])
+    failed = await t.async_move_group_verified(["cover.a", "cover.b"], 1.0)
+    assert failed == []
+    assert t._put_positions.await_count == 2  # initial + retry
+    assert t._put_positions.await_args_list[1].args[0] == [2]  # retry only re-drives the straggler
+    t.hass.services.async_call.assert_not_awaited()
+
+
+async def test_verified_move_persistent_failure_notifies() -> None:
+    """A shade that never arrives (even after retry) -> event + notification."""
+    t = _verify_tracker()
+    t._wait_settled = AsyncMock(side_effect=[{1: 100, 2: 40}, {1: 100, 2: 40}])
+    failed = await t.async_move_group_verified(["cover.a", "cover.b"], 1.0)
+    assert failed == ["cover.b"]
+    assert t._put_positions.await_count == 2
+    assert t.hass.bus.async_fire.call_args.args[0] == MOVE_FAILED_EVENT
+    assert t.hass.bus.async_fire.call_args.args[1]["entities"] == ["cover.b"]
+    t.hass.services.async_call.assert_awaited()  # persistent_notification
+
+
+async def test_verified_move_skips_unavailable_members() -> None:
+    """An unavailable (offline) shade is left out of the move entirely."""
+    t = _tracker()
+    t._entity_to_id = {"cover.a": 1, "cover.b": 2}
+    t.hass = MagicMock()
+    t.hass.states.get.side_effect = lambda e: _unavail() if e == "cover.a" else None
+    t.hass.services.async_call = AsyncMock()
+    t._put_positions = AsyncMock(return_value=True)
+    t._wait_settled = AsyncMock(return_value={2: 100})
+    await t.async_move_group_verified(["cover.a", "cover.b"], 1.0)
+    assert t._put_positions.await_args.args[0] == [2]  # only the available shade
+
+
+async def test_move_group_service_verify_routes_to_verified() -> None:
+    """The service's verify flag calls the verified path."""
+    hass = MagicMock()
+    tracker = MagicMock()
+    tracker.has_gateway_id = lambda src: True
+    tracker.async_move_group = AsyncMock()
+    tracker.async_move_group_verified = AsyncMock()
+    hass.data = {TRACKER_KEY: tracker}
+    hass.services.async_call = AsyncMock()
+    call = MagicMock()
+    call.data = {"entity_id": [abstract_entity("ko1")], "position": 0, "verify": True}
+    await _async_move_group(hass, call)
+    tracker.async_move_group_verified.assert_awaited_once()
+    tracker.async_move_group.assert_not_awaited()

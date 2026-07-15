@@ -33,6 +33,9 @@ MOVE_GROUP_SCHEMA = vol.Schema(
     {
         vol.Required("entity_id"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        # verify=true confirms arrival + retries stragglers + notifies on failure
+        # (for automations); the dashboard leaves it off for instant feedback.
+        vol.Optional("verify", default=False): cv.boolean,
     }
 )
 
@@ -40,12 +43,13 @@ MOVE_GROUP_SCHEMA = vol.Schema(
 async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
     """Move a group of shades to one position in sync (no PowerView scenes).
 
-    Gateway-tracked members go out in a single synchronized positions call;
-    untracked members (the RYSE main bedroom) go via their own cover, which
-    handles routing + the calibration lock.
+    Gateway-tracked members go out in a single synchronized positions call
+    (verified + self-healing when ``verify`` is set); untracked members (the RYSE
+    main bedroom) go via their own cover, which handles routing + the lock.
     """
     entities = call.data["entity_id"]
     position = call.data["position"]
+    verify = call.data.get("verify", False)
     tracker = hass.data.get(TRACKER_KEY)
     tracked_sources: list[str] = []
     untracked: list[str] = []
@@ -56,7 +60,10 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
         else:
             untracked.append(entity)
     if tracked_sources and tracker is not None:
-        await tracker.async_move_group(tracked_sources, position / 100)
+        if verify:
+            await tracker.async_move_group_verified(tracked_sources, position / 100)
+        else:
+            await tracker.async_move_group(tracked_sources, position / 100)
     for entity in untracked:
         await hass.services.async_call(
             "cover", "set_cover_position", {"entity_id": entity, "position": position}, blocking=False
