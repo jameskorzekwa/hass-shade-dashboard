@@ -614,6 +614,23 @@ class ShadeDashboardCard extends BaseElement {
     const elv = el == null ? 30 : el;
     const daylight = Math.min(1, Math.max(0, (elv + 6) / 14)); // dark below -6, full by ~8 deg
     const dayGlow = 0.34 * daylight;
+    // Light color temperature: amber near the horizon (sunrise/dusk), bright
+    // white through the day. One blend per tick, shared by all the layers.
+    const warmth = Math.exp(-Math.pow(elv - 1, 2) / 20);
+    const wmix = (w, a) => w.map((c, i) => Math.round(c + (a[i] - c) * warmth)).join(",");
+    const LC = {
+      uCore: wmix([255, 253, 248], [255, 238, 196]),
+      uIn: wmix([255, 249, 238], [255, 219, 150]),
+      uMid: wmix([255, 243, 228], [255, 199, 124]),
+      uOut: wmix([255, 240, 222], [255, 186, 108]),
+      eCore: wmix([255, 253, 247], [255, 240, 200]),
+      eMid: wmix([255, 251, 243], [255, 233, 186]),
+      eOut: wmix([255, 248, 238], [255, 227, 176]),
+      wCore: wmix([255, 251, 243], [255, 235, 185]),
+      wMid: wmix([255, 246, 232], [255, 214, 150]),
+      aTop: wmix([255, 252, 245], [255, 238, 200]),
+      aBot: wmix([255, 250, 241], [255, 233, 192]),
+    };
     // Admitted-light bookkeeping for the interior-brightness simulation:
     // every pane contributes (glass area) x (how open it is) x (light on it).
     let sumArea = 0, sumOpen = 0, sumBeam = 0;
@@ -651,10 +668,10 @@ class ShadeDashboardCard extends BaseElement {
       if (I > 0.02 && w) {
         css =
           `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
-          `rgba(255,248,225,${(0.95 * I).toFixed(3)}) 0,` +
-          `rgba(255,228,160,${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
-          `rgba(255,200,120,${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
-          `rgba(255,185,105,0) ${R.toFixed(0)}px)`;
+          `rgba(${LC.uCore},${(0.95 * I).toFixed(3)}) 0,` +
+          `rgba(${LC.uIn},${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
+          `rgba(${LC.uMid},${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
+          `rgba(${LC.uOut},0) ${R.toFixed(0)}px)`;
       }
       // Light leaking around the shade: bright slivers down the frame sides
       // (near-sun side hardest), a seep line above the hem, a whisper at the
@@ -672,13 +689,13 @@ class ShadeDashboardCard extends BaseElement {
           const aL = Math.min(1, 1.6 * G * (0.35 + 0.9 * tL));
           const aR = Math.min(1, 1.6 * G * (0.35 + 0.9 * tR));
           const edge = (deg, a) =>
-            `linear-gradient(${deg}deg,rgba(255,244,210,${a.toFixed(3)}) 0,rgba(255,240,198,${(a * 0.65).toFixed(3)}) 5px,rgba(255,236,190,${(a * 0.3).toFixed(3)}) 13px,rgba(255,236,190,0) 26px)`;
+            `linear-gradient(${deg}deg,rgba(${LC.eCore},${a.toFixed(3)}) 0,rgba(${LC.eMid},${(a * 0.65).toFixed(3)}) 5px,rgba(${LC.eOut},${(a * 0.3).toFixed(3)}) 13px,rgba(${LC.eOut},0) 26px)`;
           const wash = direct
             ? `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${(cy / Math.max(covered, 0.05)).toFixed(1)}%,` +
-              `rgba(255,236,182,${(0.3 * G).toFixed(3)}) 0,` +
-              `rgba(255,214,142,${(0.22 * G).toFixed(3)}) ${(R * 0.4).toFixed(0)}px,` +
-              `rgba(255,200,120,0) ${R.toFixed(0)}px)`
-            : `linear-gradient(180deg,rgba(255,240,205,${(0.55 * G).toFixed(3)}) 0,rgba(255,236,195,${(0.4 * G).toFixed(3)}) 100%)`;
+              `rgba(${LC.wCore},${(0.3 * G).toFixed(3)}) 0,` +
+              `rgba(${LC.wMid},${(0.22 * G).toFixed(3)}) ${(R * 0.4).toFixed(0)}px,` +
+              `rgba(${LC.uMid},0) ${R.toFixed(0)}px)`
+            : `linear-gradient(180deg,rgba(${LC.aTop},${(0.55 * G).toFixed(3)}) 0,rgba(${LC.aBot},${(0.4 * G).toFixed(3)}) 100%)`;
           cssOver = [edge(0, Math.min(1, 0.95 * G)), edge(90, aL), edge(270, aR), edge(180, 0.45 * G), wash].join(",");
         }
       }
