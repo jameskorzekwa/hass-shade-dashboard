@@ -570,7 +570,7 @@ class ShadeDashboardCard extends BaseElement {
   _sunSimHtml() {
     const wallBox = (key) => {
       const w = WALL_ELEV[key];
-      return `<div style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:4px">
+      return `<div style="min-width:0;display:flex;flex-direction:column;gap:4px">
         <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-weight:700;font-size:13px">${w.label}</span><span style="font-size:11px;color:#8A8177">faces ${w.az}°</span></div>
         <svg data-sim-svg="${key}" viewBox="-1 0 ${w.run + 2} ${w.sky + 0.8}" style="width:100%;height:auto;display:block;background:#FBF8F2;border:1px solid #E2DACB;border-radius:12px"></svg>
         <div data-sim-note="${key}" style="font-size:11px;color:#8A8177;text-align:center;min-height:15px"></div>
@@ -578,16 +578,16 @@ class ShadeDashboardCard extends BaseElement {
     };
     return `
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button data-sim-play title="Play the day" style="width:38px;height:38px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-size:15px;cursor:pointer">▶</button>
-        <input data-sim-scrub type="range" min="270" max="1290" step="2" style="flex:1;min-width:130px">
+        <button data-sim-play title="Play the day" style="width:38px;height:38px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:15px;cursor:pointer">▶</button>
+        <input data-sim-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:130px">
         <span data-sim-time style="font:600 13px ui-monospace,Menlo,monospace;min-width:66px;text-align:right"></span>
         <span data-sim-pos style="font-size:11px;color:#8A8177;min-width:120px"></span>
-        <button data-sim-now style="padding:9px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer">Now</button>
-        <select data-sim-season style="padding:8px 10px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
+        <button data-sim-now style="padding:9px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;cursor:pointer">Now</button>
+        <select data-sim-season style="padding:8px 10px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
           <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
         </select>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">${wallBox("west")}${wallBox("south")}${wallBox("up_west")}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px;align-items:start">${wallBox("west")}${wallBox("south")}${wallBox("up_west")}</div>
       <div style="font-size:11px;color:#8A8177">━ sun path (${"selected day"}) · ┄ Dec 21 · ╌ mountain ridge · dots mark whole hours · positions as seen from the seating area</div>`;
   }
   // Sample a day's sun track projected onto one wall; returns on-canvas segments.
@@ -640,7 +640,8 @@ class ShadeDashboardCard extends BaseElement {
     const day = this._simTrack(key, dayBase);
     out += day.segs.map((s) => `<path d="${seg2path(s)}" fill="none" stroke="#C67B3B" stroke-width=".16" opacity=".85"/>`).join("");
     for (const t of day.ticks) {
-      out += `<circle cx="${t.x.toFixed(2)}" cy="${Y(t.z).toFixed(2)}" r=".17" fill="#C67B3B"/><text x="${t.x.toFixed(2)}" y="${Y(t.z + 0.65).toFixed(2)}" text-anchor="middle" font-size=".68" fill="#A08B72">${((t.h + 11) % 12) + 1}${t.h < 12 ? "a" : "p"}</text>`;
+      const ly = Math.max(0.85, Y(t.z + 0.65)); // keep hour labels inside the canvas
+      out += `<circle cx="${t.x.toFixed(2)}" cy="${Y(t.z).toFixed(2)}" r=".17" fill="#C67B3B"/><text x="${t.x.toFixed(2)}" y="${ly.toFixed(2)}" text-anchor="middle" font-size=".68" fill="#A08B72">${((t.h + 11) % 12) + 1}${t.h < 12 ? "a" : "p"}</text>`;
     }
     out += `<g data-sim-dot style="display:none">
       <circle r="1.05" fill="#F0A94F" opacity=".14"/><circle r=".62" fill="#F0A94F" opacity=".3"/>
@@ -849,7 +850,7 @@ class ShadeDashboardCard extends BaseElement {
     return `
 <style>
   /* Scale the whole panel up for easier touch control on the small wall tablet. */
-  :host { display:block; height:100%; zoom:1.15; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; }
+  :host { display:block; height:100%; zoom:1.15; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; color-scheme:light; }
   * { box-sizing:border-box; }
   button { font-family:inherit; }
   .frame { width:100%; height:100%; min-height:640px; background:#F5F1EA; display:flex; overflow:hidden; }
@@ -959,7 +960,7 @@ class ShadeDashboardCard extends BaseElement {
       `<button data-scene="${scene}" style="flex:1;padding:15px;border-radius:12px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:700;font-size:14px;color:#26211B;cursor:pointer">${txt}</button>`;
     return `
 <style>
-  :host { display:block; height:100%; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; }
+  :host { display:block; height:100%; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; color-scheme:light; }
   * { box-sizing:border-box; }
   button { font-family:inherit; }
   input[type=range]{ accent-color:${ACCENT}; height:28px; }
