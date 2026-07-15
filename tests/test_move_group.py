@@ -197,3 +197,40 @@ async def test_move_group_service_verify_routes_to_verified() -> None:
     await _async_move_group(hass, call)
     tracker.async_move_group_verified.assert_awaited_once()
     tracker.async_move_group.assert_not_awaited()
+
+
+def test_group_entities_resolution() -> None:
+    from custom_components.shade_dashboard.const import abstract_entity, group_entities
+
+    west = group_entities("west_glare")
+    # LR west (u4-7, l3-6) + office (ko1-2) + upstairs hallway (uh1-3) = 13
+    assert len(west) == 13
+    for slot in ["u4", "u7", "l3", "l6", "ko1", "ko2", "uh1", "uh3"]:
+        assert abstract_entity(slot) in west
+    # all_no_bedroom = everything except the RYSE main bedroom
+    allnb = group_entities("all_no_bedroom")
+    assert abstract_entity("mbr1") not in allnb
+    assert len(allnb) == 21
+    assert group_entities("south_glare") == group_entities("south")
+    assert group_entities("nope") is None
+
+
+async def test_move_group_service_accepts_group(hass: HomeAssistant) -> None:
+    """A named group resolves to its covers through HA's dispatch."""
+    from custom_components.shade_dashboard.const import SHADES
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    tracker = hass.data[TRACKER_KEY]
+    tracker.has_gateway_id = lambda src: True
+    tracker.async_move_group_verified = AsyncMock()
+
+    await hass.services.async_call(
+        "shade_dashboard", "move_group", {"group": "south_glare", "position": 0, "verify": True}, blocking=True
+    )
+    tracker.async_move_group_verified.assert_awaited_once()
+    sources = tracker.async_move_group_verified.await_args.args[0]
+    assert set(sources) == {SHADES[s] for s in ("u1", "u2", "u3", "l1", "l2")}

@@ -189,6 +189,25 @@ def source_for_abstract(entity: str) -> str | None:
     return entity if entity in _SOURCE_TO_SLOT else None
 
 
+# Named groups the shade_dashboard.move_group service accepts (so automations say
+# group: west_glare instead of listing entities). Includes the dashboard groups
+# plus a few automation-only ones (edit membership here, in one place):
+#   west_glare  = every WEST-FACING shade (LR west wall + office + upstairs hallway)
+#   south_glare = the south wall
+#   all_no_bedroom = everything on the gateway (the RYSE main bedroom left alone)
+_AUTOMATION_GROUP_SLOTS: dict[str, list[str]] = {
+    "west_glare": _GROUP_SLOTS["west"] + _GROUP_SLOTS["office"] + _GROUP_SLOTS["upstairs_hallway"],
+    "south_glare": _GROUP_SLOTS["south"],
+    "all_no_bedroom": [s for s in _GROUP_SLOTS["all"] if s != "mbr1"],
+}
+
+
+def group_entities(name: str) -> list[str] | None:
+    """Resolve a group name to its abstraction cover entities (None if unknown)."""
+    slots = _GROUP_SLOTS.get(name) or _AUTOMATION_GROUP_SLOTS.get(name)
+    return [abstract_entity(s) for s in slots] if slots else None
+
+
 def build_panel_config() -> dict:
     """Resolve the slot layout into the JSON config handed to the card.
 
