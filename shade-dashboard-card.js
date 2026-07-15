@@ -377,6 +377,7 @@ class ShadeDashboardCard extends BaseElement {
     // the cover's opening/closing state and stops exactly when the shade stops.
     this._commanded = {};
     this._movedSince = {};
+    this._pendingTarget = {}; // entity -> {t, ts}: commanded target (untracked bridge)
     // Hidden sun-test mode (Settings): overrides the sun2 angles with
     // computed positions for a scrubbable time of day. Off = live sensors.
     this._sunTest = { on: false, playing: false, season: "today", min: null };
@@ -422,6 +423,24 @@ class ShadeDashboardCard extends BaseElement {
     return st.state === "open" ? 100 : 0; // no position support -> binary
   }
   _dispPos(slot) {
+    // The RYSE (untracked) shade: bridge the tap -> optimistic-state round
+    // trip. The unified cover reports the commanded TARGET while the device
+    // travels, but for the first beat after a tap the hass state still holds
+    // the stale pre-move position — without this hold the fabric moves, snaps
+    // back, then jumps. Cleared the moment the cover reports (about) the
+    // target; an 8s valve covers a lost command.
+    if (!(this._layout.recal_slots || []).includes(slot)) {
+      const e = this._entity(slot);
+      const pend = this._pendingTarget[e];
+      if (pend) {
+        const pos = this._pos(slot);
+        if (Date.now() - pend.ts > 8000 || (pos != null && Math.abs(pos - pend.t) <= 2)) {
+          delete this._pendingTarget[e];
+        } else {
+          return pend.t;
+        }
+      }
+    }
     return this._pos(slot);
   }
   // Readout for a closed-% value: word at the extremes, number in between.
@@ -454,9 +473,12 @@ class ShadeDashboardCard extends BaseElement {
   }
 
   // Flash a shade the instant it's tapped (the cover's opening/closing state
-  // takes over within a beat).
-  _mark(entity) {
-    if (entity) this._commanded[entity] = Date.now();
+  // takes over within a beat). When the commanded target is known, remember
+  // it so _dispPos can hold untracked shades on it during the round-trip.
+  _mark(entity, target) {
+    if (!entity) return;
+    this._commanded[entity] = Date.now();
+    if (target != null) this._pendingTarget[entity] = { t: target, ts: Date.now() };
   }
 
   _maybeBuild() {
@@ -1161,7 +1183,7 @@ class ShadeDashboardCard extends BaseElement {
     const position = dir === "up" ? 100 : 0;
     // Flash every member at once, then move them all in one synchronized call
     // (no PowerView scene — see shade_dashboard.move_group).
-    entities.forEach((e) => this._mark(e));
+    entities.forEach((e) => this._mark(e, position));
     this._hass.callService("shade_dashboard", "move_group", { entity_id: entities, position });
     this._update();
   }
