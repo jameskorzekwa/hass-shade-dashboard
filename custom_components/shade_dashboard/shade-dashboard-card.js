@@ -68,6 +68,9 @@ const DEFAULT_LAYOUT = {
   sun: {
     elevation_entity: "sensor.home2_sun_elevation",
     azimuth_entity: "sensor.home2_sun_azimuth",
+    // sun2 (terrain/elevation-corrected) sunrise & sunset timestamps.
+    rising_entity: "sensor.home2_sun_rising",
+    setting_entity: "sensor.home2_sun_setting",
     west_lux: "sensor.west_light_level",
     south_lux: "sensor.south_light_level",
   },
@@ -493,15 +496,7 @@ class ShadeDashboardCard extends HTMLElement {
       <div style="font-size:19px;font-weight:700;letter-spacing:.3px">Shades</div>
       <div style="font-size:11px;color:#8A8177;margin-top:2px">22 shades</div>
     </div>
-    <div data-sun-card style="display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2">
-      <div style="position:relative;width:150px;height:66px;overflow:hidden;margin:0 auto">
-        <div style="position:absolute;left:8px;top:8px;width:134px;height:134px;border-radius:50%;border:1.5px dashed #CDC3B2"></div>
-        <div style="position:absolute;left:0;right:0;bottom:0;height:2px;background:#CDC3B2"></div>
-        <div data-sun-dot style="position:absolute;width:12px;height:12px;border-radius:50%;background:${ACCENT};opacity:0;left:69px;top:0;box-shadow:0 0 10px 2px rgba(198,123,59,.45)"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:#8A8177"><span>E</span><span data-sun-time style="color:#26211B;font-weight:600"></span><span>W</span></div>
-      <div data-sun-label style="text-align:center;font-size:11px;color:#8A8177"></div>
-    </div>
+    ${this._sunCardHtml()}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">SCENES</div>
     ${sceneBtn("open_all", sc.open_all)}
     ${sceneBtn("close_all", sc.close_all)}
@@ -603,6 +598,7 @@ class ShadeDashboardCard extends HTMLElement {
   </div>
 
   <div data-panel="home" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:flex;flex-direction:column;gap:14px">
+    ${this._sunCardHtml()}
     <div style="display:flex;gap:10px">${bigBtn("open_all", "Open All")}${bigBtn("close_all", "Close All")}</div>
     ${SECTIONS.map(section).join("")}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:4px">MODES</div>
@@ -904,6 +900,36 @@ class ShadeDashboardCard extends HTMLElement {
     }
     return null;
   }
+  // Format a sun2 timestamp sensor (ISO datetime) as a short local time, e.g. "8:11 PM".
+  _sunTimeStr(entity) {
+    const ms = this._sunTime(entity);
+    return ms == null ? null : new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  // Parse a sun2 timestamp sensor to epoch milliseconds (or null).
+  _sunTime(entity) {
+    const st = entity && this._hass.states[entity];
+    if (!st) return null;
+    const ms = Date.parse(st.state);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  // Shared sun tracker widget — used by both the desktop sidebar and the mobile
+  // home panel. Sunrise/sunset come from sun2; the dot/day-night from sun2 elevation+azimuth.
+  _sunCardHtml() {
+    return `
+    <div data-sun-card style="display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2">
+      <div style="position:relative;width:150px;height:66px;overflow:hidden;margin:0 auto">
+        <div style="position:absolute;left:8px;top:8px;width:134px;height:134px;border-radius:50%;border:1.5px dashed #CDC3B2"></div>
+        <div style="position:absolute;left:0;right:0;bottom:0;height:2px;background:#CDC3B2"></div>
+        <div data-sun-dot style="position:absolute;width:12px;height:12px;border-radius:50%;background:${ACCENT};opacity:0;left:69px;top:0;box-shadow:0 0 10px 2px rgba(198,123,59,.45)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#8A8177">
+        <span title="Sunrise (sun2)">↑&nbsp;<span data-sun-rise style="color:#26211B;font-weight:600">—</span></span>
+        <span data-sun-time style="color:#26211B;font-weight:600"></span>
+        <span title="Sunset (sun2)"><span data-sun-set style="color:#26211B;font-weight:600">—</span>&nbsp;↓</span>
+      </div>
+      <div data-sun-label style="text-align:center;font-size:11px;color:#8A8177"></div>
+    </div>`;
+  }
 
   _updateSun() {
     const root = this.shadowRoot;
@@ -913,17 +939,35 @@ class ShadeDashboardCard extends HTMLElement {
     const dot = root.querySelector("[data-sun-dot]");
     const timeEl = root.querySelector("[data-sun-time]");
     const labelEl = root.querySelector("[data-sun-label]");
+    const riseEl = root.querySelector("[data-sun-rise]");
+    const setEl = root.querySelector("[data-sun-set]");
     if (timeEl) timeEl.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const rise = this._sunTimeStr(cfg.rising_entity);
+    const set = this._sunTimeStr(cfg.setting_entity);
+    if (riseEl && rise) riseEl.textContent = rise;
+    if (setEl && set) setEl.textContent = set;
 
-    const night = elev == null || elev < 0;
+    // Place the sun by fraction of daylight elapsed (sun2 sunrise -> sunset) so it
+    // rides the visible arc all the way to the west horizon at sunset. A raw-azimuth
+    // mapping puts the low evening/morning sun on the horizon corners, which fall
+    // below the 66px arc window and clip the dot out of view entirely.
+    const sunriseMs = this._sunTime(cfg.rising_entity);
+    const sunsetMs = this._sunTime(cfg.setting_entity);
+    let frac = null;
+    if (sunriseMs != null && sunsetMs != null && sunsetMs > sunriseMs) {
+      frac = (Date.now() - sunriseMs) / (sunsetMs - sunriseMs);
+    }
+    // Fall back to elevation when sun2 isn't available.
+    const night = frac != null ? frac <= 0 || frac >= 1 : elev == null || elev < 0;
     if (dot) {
-      if (night || az == null) {
+      if (night || frac == null) {
         dot.style.opacity = "0";
       } else {
-        // azimuth 90(E)->270(W) across a semicircle; center (75,75), r=67
-        const t = Math.PI * (Math.min(270, Math.max(90, az)) - 90) / 180;
-        const x = 75 - 67 * Math.cos(t);
-        const y = 75 - 67 * Math.sin(t);
+        // Arc: center (75,75) r67; g0 is where it meets the horizon inside the window.
+        const g0 = 0.1345;
+        const g = g0 + Math.min(1, Math.max(0, frac)) * (Math.PI - 2 * g0);
+        const x = 75 - 67 * Math.cos(g);
+        const y = 75 - 67 * Math.sin(g);
         dot.style.left = `${x - 6}px`;
         dot.style.top = `${y - 6}px`;
         dot.style.opacity = "1";

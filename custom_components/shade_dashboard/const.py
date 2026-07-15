@@ -145,10 +145,14 @@ TOGGLES: dict[str, dict] = {
 # elevation/azimuth come from the sun2 integration's sensors (numeric state).
 # The card falls back to core ``sun.sun`` elevation/azimuth attributes if these
 # are unavailable, so the widget works whether or not the sun2 sensors are
-# enabled. The glare hint reads the living-room lux sensors.
+# enabled. rising/setting are the sun2 (terrain/elevation-corrected) sunrise and
+# sunset timestamps; the card places the sun by fraction of daylight elapsed
+# between them. The glare hint reads the living-room lux sensors.
 SUN: dict[str, str] = {
     "elevation_entity": "sensor.home2_sun_elevation",
     "azimuth_entity": "sensor.home2_sun_azimuth",
+    "rising_entity": "sensor.home2_sun_rising",
+    "setting_entity": "sensor.home2_sun_setting",
     "west_lux": "sensor.west_light_level",
     "south_lux": "sensor.south_light_level",
 }
