@@ -18,14 +18,24 @@ move_group:
   fields:
     entity_id:
       name: Shades
-      description: The shade covers to move (cover.shade_*).
-      required: true
+      description: The shade covers to move (cover.shade_*). Use this or group.
+      required: false
       example: "[cover.shade_u4, cover.shade_l3]"
       selector:
         entity:
           integration: shade_dashboard
           domain: cover
           multiple: true
+    group:
+      name: Group
+      description: >-
+        A named group instead of listing covers — south, west, north, hallway,
+        office, upstairs_hallway, main_bedroom, main_floor, upstairs, all, or the
+        automation groups west_glare / south_glare / all_no_bedroom.
+      required: false
+      example: west_glare
+      selector:
+        text:
     position:
       name: Position
       description: Target position, 0 = closed, 100 = open.

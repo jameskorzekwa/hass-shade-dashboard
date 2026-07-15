@@ -20,7 +20,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, TRACKER_KEY, build_panel_config, source_for_abstract
+from .const import DOMAIN, TRACKER_KEY, build_panel_config, group_entities, source_for_abstract
 from .gateway import GatewayTracker
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,13 +30,19 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 SERVICE_MOVE_GROUP = "move_group"
 MOVE_GROUP_SCHEMA = vol.Schema(
-    {
-        vol.Required("entity_id"): vol.All(cv.ensure_list, [cv.entity_id]),
-        vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-        # verify=true confirms arrival + retries stragglers + notifies on failure
-        # (for automations); the dashboard leaves it off for instant feedback.
-        vol.Optional("verify", default=False): cv.boolean,
-    }
+    vol.All(
+        {
+            # Target either explicit covers (dashboard) or a named group
+            # (automations, e.g. group: west_glare) — at least one required.
+            vol.Optional("entity_id"): vol.All(cv.ensure_list, [cv.entity_id]),
+            vol.Optional("group"): cv.string,
+            vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            # verify=true confirms arrival + retries stragglers + notifies on failure
+            # (for automations); the dashboard leaves it off for instant feedback.
+            vol.Optional("verify", default=False): cv.boolean,
+        },
+        cv.has_at_least_one_key("entity_id", "group"),
+    )
 )
 
 
@@ -47,7 +53,13 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
     (verified + self-healing when ``verify`` is set); untracked members (the RYSE
     main bedroom) go via their own cover, which handles routing + the lock.
     """
-    entities = call.data["entity_id"]
+    entities = list(call.data.get("entity_id") or [])
+    if "group" in call.data:
+        resolved = group_entities(call.data["group"])
+        if resolved is None:
+            _LOGGER.warning("Unknown move_group group %r", call.data["group"])
+            return
+        entities += resolved
     position = call.data["position"]
     verify = call.data.get("verify", False)
     tracker = hass.data.get(TRACKER_KEY)
