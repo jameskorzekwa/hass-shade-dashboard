@@ -121,7 +121,7 @@ function fireEvent(node, type, detail) {
 
 // --- static DOM builders (styles mirror the design prototype) ----------------
 const fabric = (slot, hem, glow) =>
-  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease">` +
+  `<div data-fabric="${slot}" style="position:absolute;top:0;left:${glow ? 3 : 0}px;right:${glow ? 3 : 0}px;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease">` +
     (glow ? `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` : "") +
   `</div>`;
 const offline = (slot) =>
@@ -323,7 +323,7 @@ const winAngled = (slot, h) => {
       // windows) instead of being clipped away.
       `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
         sunUnder(slot) +
-        `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
+        `<div data-fabric="${slot}" style="position:absolute;top:0;left:3px;right:3px;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
           `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` +
         `</div>` +
       `</div>` +
@@ -690,19 +690,21 @@ class ShadeDashboardCard extends BaseElement {
     // and the inside brightens — brightest at night. Diffuse skylight enters
     // any open pane; the direct-beam term weighs panes the sun is actually
     // hitting. Positions are live, so the room shifts as shades travel.
-    const diffuseIn = sumArea ? (sumOpen / sumArea) * daylight : 0;
+    const diffuseIn = sumArea ? sumOpen / sumArea : 0;
     const directIn = sumArea ? Math.min(1, sumBeam / (sumArea * 0.12)) : 0;
-    this._setInterior(Math.min(1, 0.6 * diffuseIn + 0.4 * directIn));
+    const shadesTerm = Math.min(1, 1.3 * (0.6 * diffuseIn + 0.4 * directIn));
+    // Daytime alone pulls the room down (bright outside = inside reads dark);
+    // how far depends on how much the shades let through.
+    this._setInterior(daylight * (0.35 + 0.65 * shadesTerm));
   }
-  // Tint the room chrome between cozy-bright (no light coming in) and dim
-  // (bright day pouring through open glass). Instantaneous — scrubbing the
-  // sun test from noon to night must snap, and a wide swing so the change
-  // is unmistakable.
+  // Tint the room chrome between cozy-bright (night, nothing coming in) and
+  // properly dark (bright day pouring through open glass). Instantaneous —
+  // scrubbing the sun test from noon to night must snap.
   _setInterior(light) {
     const frame = this.shadowRoot && this.shadowRoot.querySelector(".frame");
     if (!frame || this._builtMobile) return;
     frame.style.transition = "none"; // deployed cards may carry an old inline fade
-    frame.style.background = hexMix("#FFFDF6", "#BFB093", Math.min(1, light * 1.3));
+    frame.style.background = hexMix("#FFFDF6", "#A3937A", Math.min(1, light));
   }
   // Sky outside the windows: the glass gradients tint continuously with the
   // sun — deep blue-grey night, warm dawn/dusk horizon color on EVERY pane
