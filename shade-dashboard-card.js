@@ -611,60 +611,65 @@ class ShadeDashboardCard extends BaseElement {
     // lights out, with a soft fade over the last ~1.5 deg of descent.
     const gate = az != null && az > 240 ? ridge - 0.2 : -0.3;
     const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.5));
-    for (const [slot, g] of Object.entries(SLOT_GLASS)) {
+    // Ambient golden-hour glow: at sunrise/sunset EVERY covered shade leaks a
+    // little warm light around its edges (the whole sky is lit), on top of the
+    // stronger direct leak on panes the sun is actually near. Same horizon
+    // bell as the sky tint, gated by daylight/ridge like the direct light.
+    const ambient = 0.55 * Math.exp(-Math.pow((el == null ? 90 : el) - 1, 2) / 16) * dayFade;
+    for (const slot of Object.keys(this._layout.shades)) {
       const under = root.querySelector(`[data-sunlit="${slot}"]`);
       const over = root.querySelector(`[data-sunglow="${slot}"]`);
       if (!under && !over) continue;
       const host = (under || over).parentElement;
       const w = host ? host.clientWidth || 0 : 0;
       let css = "none", cssOver = "none";
-      const wall = walls[g.wall];
+      const g = SLOT_GLASS[slot]; // panes without known orientation still get ambient
+      const wall = g ? walls[g.wall] : null;
       const p = wall && dayFade > 0 && w ? sunOnWall(wall, az, el) : { behind: true };
+      let I = 0, cx = 50, cy = 50, pxFt = w / 4.15;
       if (!p.behind) {
         // Distance from the sun to the nearest point of this pane (0 = on it).
         const nx = Math.min(g.x2, Math.max(g.x1, p.x));
         const nz = Math.min(g.z2, Math.max(g.z1, p.z));
         const dist = Math.hypot(p.x - nx, p.z - nz);
-        const I = Math.max(0, 1 - dist / 7) ** 1.15 * dayFade;
-        if (I > 0.02) {
-          const cx = ((p.x - g.x1) / (g.x2 - g.x1)) * 100;
-          const cy = ((g.z2 - p.z) / (g.z2 - g.z1)) * 100;
-          const pxFt = w / (g.x2 - g.x1);
-          const R = 8 * pxFt, core = 1.2 * pxFt;
-          css =
-            `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
-            `rgba(255,248,225,${(0.95 * I).toFixed(3)}) 0,` +
-            `rgba(255,228,160,${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
-            `rgba(255,200,120,${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
-            `rgba(255,185,105,0) ${R.toFixed(0)}px)`;
-          // Light leaking around a closed shade: bright slivers down the frame
-          // sides (the side nearer the sun leaks hardest), a seep line above
-          // the hem, a whisper at the top gap, and a faint wash through the
-          // weave. The glow layer is a child of the fabric, so it exactly
-          // covers the shaded region at any position — the sun-lit glass
-          // below a half-drawn shade comes from the under layer instead.
-          const pos = this._dispPos(slot);
-          const covered = pos == null ? 1 : (100 - pos) / 100;
-          if (covered > 0.02) {
-            const tL = Math.max(0, 1 - Math.abs(p.x - g.x1) / 5);
-            const tR = Math.max(0, 1 - Math.abs(p.x - g.x2) / 5);
-            const aL = Math.min(1, 1.35 * I * (0.3 + 0.9 * tL));
-            const aR = Math.min(1, 1.35 * I * (0.3 + 0.9 * tR));
-            const edge = (deg, a) =>
-              `linear-gradient(${deg}deg,rgba(255,242,204,${a.toFixed(3)}) 0,rgba(255,240,198,${(a * 0.55).toFixed(3)}) 3px,rgba(255,240,198,0) 14px)`;
-            // radial center in the glow layer's own (covered-region) coords
-            const cyGlow = cy / Math.max(covered, 0.05);
-            cssOver = [
-              edge(0, Math.min(1, 0.95 * I)),   // hem seep (bottom of the fabric)
-              edge(90, aL),        // left frame sliver
-              edge(270, aR),       // right frame sliver
-              edge(180, 0.45 * I), // top gap
-              `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cyGlow.toFixed(1)}%,` +
-              `rgba(255,236,182,${(0.3 * I).toFixed(3)}) 0,` +
-              `rgba(255,214,142,${(0.22 * I).toFixed(3)}) ${(R * 0.4).toFixed(0)}px,` +
-              `rgba(255,200,120,0) ${R.toFixed(0)}px)`,
-            ].join(",");
-          }
+        I = Math.max(0, 1 - dist / 7) ** 1.15 * dayFade;
+        cx = ((p.x - g.x1) / (g.x2 - g.x1)) * 100;
+        cy = ((g.z2 - p.z) / (g.z2 - g.z1)) * 100;
+        pxFt = w / (g.x2 - g.x1);
+      }
+      const R = 8 * pxFt, core = 1.2 * pxFt;
+      if (I > 0.02 && w) {
+        css =
+          `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
+          `rgba(255,248,225,${(0.95 * I).toFixed(3)}) 0,` +
+          `rgba(255,228,160,${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
+          `rgba(255,200,120,${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
+          `rgba(255,185,105,0) ${R.toFixed(0)}px)`;
+      }
+      // Light leaking around the shade: bright slivers down the frame sides
+      // (near-sun side hardest), a seep line above the hem, a whisper at the
+      // top gap, and a wash through the weave. Direct-sun leak, floored by
+      // the ambient golden-hour leak. The glow layer is a child of the
+      // fabric, so it exactly covers the shaded region at any position.
+      const G = Math.max(I, w ? ambient : 0);
+      if (over && G > 0.02) {
+        const pos = this._dispPos(slot);
+        const covered = pos == null ? 1 : (100 - pos) / 100;
+        if (covered > 0.02) {
+          const direct = I > 0.02 && I >= ambient;
+          const tL = direct ? Math.max(0, 1 - Math.abs(p.x - g.x1) / 5) : 0.5;
+          const tR = direct ? Math.max(0, 1 - Math.abs(p.x - g.x2) / 5) : 0.5;
+          const aL = Math.min(1, 1.35 * G * (0.3 + 0.9 * tL));
+          const aR = Math.min(1, 1.35 * G * (0.3 + 0.9 * tR));
+          const edge = (deg, a) =>
+            `linear-gradient(${deg}deg,rgba(255,242,204,${a.toFixed(3)}) 0,rgba(255,240,198,${(a * 0.55).toFixed(3)}) 3px,rgba(255,240,198,0) 14px)`;
+          const wash = direct
+            ? `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${(cy / Math.max(covered, 0.05)).toFixed(1)}%,` +
+              `rgba(255,236,182,${(0.3 * G).toFixed(3)}) 0,` +
+              `rgba(255,214,142,${(0.22 * G).toFixed(3)}) ${(R * 0.4).toFixed(0)}px,` +
+              `rgba(255,200,120,0) ${R.toFixed(0)}px)`
+            : `linear-gradient(180deg,rgba(255,236,190,${(0.14 * G).toFixed(3)}) 0,rgba(255,232,184,${(0.08 * G).toFixed(3)}) 100%)`;
+          cssOver = [edge(0, Math.min(1, 0.95 * G)), edge(90, aL), edge(270, aR), edge(180, 0.45 * G), wash].join(",");
         }
       }
       if (under) under.style.background = css;
@@ -672,10 +677,12 @@ class ShadeDashboardCard extends BaseElement {
     }
   }
   // Sky outside the windows: the glass gradients tint continuously with the
-  // sun — deep blue-grey night, a warm horizon glow at dawn/dusk on the walls
-  // facing the sun, and the normal bright glass by day. Desktop only (the
-  // phone layout keeps its static tiles). Live updates step minute-by-minute,
-  // so the change reads as a slow drift; in test-play it animates smoothly.
+  // sun — deep blue-grey night, warm dawn/dusk horizon color on EVERY pane
+  // (the whole sky takes on sunrise/sunset tones, regardless of which way a
+  // wall faces — per the user), and the normal bright glass by day. Desktop
+  // only (the phone layout keeps its static tiles). Live updates step
+  // minute-by-minute, so the change reads as a slow drift; in test-play it
+  // animates smoothly.
   _updateSky(az, el) {
     const root = this.shadowRoot;
     if (!root || this._builtMobile) return;
@@ -683,40 +690,28 @@ class ShadeDashboardCard extends BaseElement {
     const elv = el == null ? 30 : el; // sensors missing -> daytime look
     const night = 1 - sm(elv, -9, -1);
     const glow = Math.exp(-Math.pow(elv - 1, 2) / 16); // horizon bell around el ~1
-    const walls = this._geoWalls();
-    const rad = Math.PI / 180;
-    const mk = (facing) => {
-      const warm = glow * (0.15 + 0.85 * facing) * (1 - night * 0.85);
-      let uTop = hexMix("#CBD6DC", "#39445A", night), uBot = hexMix("#E2E2D6", "#4A5468", night);
-      let lTop = hexMix("#D8DFE2", "#39445A", night), lMid = hexMix("#E9E6DB", "#4A5468", night);
-      let lBot = hexMix("#A8B29B", "#3B443C", night);
-      uTop = hexMix(uTop, "#D9AF9B", warm * 0.35); uBot = hexMix(uBot, "#F2BE7F", warm * 0.85);
-      lTop = hexMix(lTop, "#D9AF9B", warm * 0.45); lMid = hexMix(lMid, "#F2BE7F", warm * 0.9);
-      lBot = hexMix(lBot, "#C9A176", warm * 0.5);
-      return {
-        upper: `linear-gradient(180deg,${uTop} 0%,${uBot} 100%)`,
-        lower: `linear-gradient(180deg,${lTop} 0%,${lMid} 55%,${lBot} 100%)`,
-        uTop, uBot,
-      };
+    const warm = glow * (1 - night * 0.85);
+    let uTop = hexMix("#CBD6DC", "#39445A", night), uBot = hexMix("#E2E2D6", "#4A5468", night);
+    let lTop = hexMix("#D8DFE2", "#39445A", night), lMid = hexMix("#E9E6DB", "#4A5468", night);
+    let lBot = hexMix("#A8B29B", "#3B443C", night);
+    uTop = hexMix(uTop, "#D9AF9B", warm * 0.35); uBot = hexMix(uBot, "#F2BE7F", warm * 0.85);
+    lTop = hexMix(lTop, "#D9AF9B", warm * 0.45); lMid = hexMix(lMid, "#F2BE7F", warm * 0.9);
+    lBot = hexMix(lBot, "#C9A176", warm * 0.5);
+    const sky = {
+      upper: `linear-gradient(180deg,${uTop} 0%,${uBot} 100%)`,
+      lower: `linear-gradient(180deg,${lTop} 0%,${lMid} 55%,${lBot} 100%)`,
+      uTop, uBot,
     };
-    const cache = {};
-    const skyFor = (slot) => {
-      const wallKey = SLOT_GLASS[slot] ? SLOT_GLASS[slot].wall : "_neutral";
-      if (!cache[wallKey]) {
-        let facing = 0.25; // unknown-orientation panes get the neutral twilight
-        const wall = walls[wallKey];
-        if (wall && az != null) {
-          const d = ((az - wall.az + 540) % 360) - 180;
-          facing = Math.max(0, Math.cos(d * rad));
-        }
-        cache[wallKey] = mk(facing);
-      }
-      return cache[wallKey];
-    };
+    // The front door's little window follows the same sky.
+    const doorGlass = root.querySelector("[data-doorglass]");
+    if (doorGlass) {
+      let dTop = hexMix("#8FA0A8", "#2E3748", night), dBot = hexMix("#B9BDB0", "#3B4350", night);
+      dTop = hexMix(dTop, "#D9AF9B", warm * 0.4); dBot = hexMix(dBot, "#F2BE7F", warm * 0.7);
+      doorGlass.style.background = `linear-gradient(180deg,${dTop},${dBot})`;
+    }
     for (const slot of Object.keys(this._layout.shades)) {
       const win = root.querySelector(`[data-slot="${slot}"]`);
       if (!win) continue;
-      const sky = skyFor(slot);
       const stops = win.querySelectorAll(`#sd-g-${slot} stop`); // angled clerestories (SVG)
       if (stops.length === 2) {
         stops[0].setAttribute("stop-color", sky.uTop);
@@ -796,7 +791,7 @@ class ShadeDashboardCard extends BaseElement {
           // col 1: upper 1 over the front door
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">` +
             lowerCol("u1", GLASS_UPPER) +
-            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
+            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div data-doorglass style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
           `</div>` +
           // col 2: upper 2 over lower 1
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u2", GLASS_UPPER)}${lowerCol("l1")}</div>` +
