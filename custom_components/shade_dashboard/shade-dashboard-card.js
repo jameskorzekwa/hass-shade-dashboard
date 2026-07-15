@@ -1363,10 +1363,10 @@ class ShadeDashboardCard extends BaseElement {
         <div style="position:absolute;left:0;right:0;bottom:0;height:2px;background:#CDC3B2"></div>
         <div data-sun-dot style="position:absolute;width:12px;height:12px;border-radius:50%;background:${ACCENT};opacity:0;left:69px;top:0;box-shadow:0 0 10px 2px rgba(198,123,59,.45)"></div>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#8A8177">
-        <span title="Sunrise (sun2)">↑&nbsp;<span data-sun-rise style="color:#26211B;font-weight:600">—</span></span>
-        <span data-sun-time style="color:#26211B;font-weight:600"></span>
-        <span title="Sunset (sun2)"><span data-sun-set style="color:#26211B;font-weight:600">—</span>&nbsp;↓</span>
+      <div data-sun-time style="text-align:center;font:700 16px 'Instrument Sans',system-ui,sans-serif;color:#26211B;white-space:nowrap;line-height:1.2"></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:10.5px;color:#8A8177">
+        <span title="Sunrise (sun2)" style="white-space:nowrap">↑ <span data-sun-rise style="color:#26211B;font-weight:600">—</span></span>
+        <span title="Sunset (sun2)" style="white-space:nowrap"><span data-sun-set style="color:#26211B;font-weight:600">—</span> ↓</span>
       </div>
       <div data-sun-label style="text-align:center;font-size:11px;color:#8A8177"></div>
     </div>`;
@@ -1386,7 +1386,7 @@ class ShadeDashboardCard extends BaseElement {
     const labelEl = root.querySelector("[data-sun-label]");
     const riseEl = root.querySelector("[data-sun-rise]");
     const setEl = root.querySelector("[data-sun-set]");
-    if (timeEl) timeEl.textContent = (sunAE.test ? "test · " : "") + new Date(nowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (timeEl) timeEl.textContent = new Date(nowMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     const rise = this._sunTimeStr(cfg.rising_entity);
     const set = this._sunTimeStr(cfg.setting_entity);
     if (riseEl && rise) riseEl.textContent = rise;
@@ -1425,7 +1425,7 @@ class ShadeDashboardCard extends BaseElement {
       else if (az != null && az < 135) text = "Morning · sun in the east";
       else if (az != null && az > 225) text = westLux != null && westLux > 30 ? "Evening · glare on west wall" : "Evening · sun in the west";
       else text = "Midday · sun high south";
-      labelEl.textContent = text;
+      labelEl.textContent = (sunAE.test ? "☀ TEST · " : "") + text;
     }
     // The per-window sunlight + outside sky ride the same tick.
     this._updateSunLight(az, elev);
