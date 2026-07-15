@@ -172,6 +172,12 @@ const mobileDoorTile = (slot) =>
   `</div>`;
 // In-motion flash CSS shared by both layouts.
 const FLASH_CSS = `
+  /* Every button gives hover + press feedback: brightness composes over any
+     inline background (light or dark), and the tiny press-scale reads as a
+     physical click. Touch devices get the :active state on tap. */
+  button { transition: filter .12s ease, transform .06s ease; }
+  button:hover { filter: brightness(.94); }
+  button:active { filter: brightness(.85); transform: scale(.97); }
   @keyframes sd-pulse { 0%,100% { outline-color: rgba(198,123,59,.95); } 50% { outline-color: rgba(198,123,59,.15); } }
   .sd-moving { outline: 3px solid rgba(198,123,59,.95); outline-offset: 1px; border-radius: 3px; animation: sd-pulse .95s ease-in-out infinite; }
   .sd-flash-ov { position:absolute; inset:0; background:${ACCENT}; opacity:0; pointer-events:none; }

@@ -104,10 +104,19 @@ class ShadeCover(CoverEntity):
         self._prev_live: int | None = None
         self._live_moving = False
         self._hold: int | None = None  # pre-command hold until the gateway confirms motion
+        # Optimistic target for the untracked (RYSE) shade: it reports only
+        # endpoint positions — during travel its current_position sits at the
+        # START value and jumps at the end, which made the card's fabric snap
+        # back mid-move. While a command is in flight we report the TARGET,
+        # then reconcile with the real value once the device lands.
+        self._optimistic: int | None = None
+        self._optimistic_start: int | None = None
+        self._optimistic_unsub = None  # cancels the safety-valve timer
 
     async def async_added_to_hass(self) -> None:
         """Resolve name/features, then follow the source cover + live events."""
         self._resolve_meta()
+        self.async_on_remove(self._cancel_optimistic_timer)
         self.async_on_remove(async_track_state_change_event(self.hass, [self._source], self._source_changed))
         if self._tracked:
             self.async_on_remove(self.hass.bus.async_listen(LIVE_EVENT, self._live_event))
@@ -155,7 +164,33 @@ class ShadeCover(CoverEntity):
         """The real cover changed (availability, and position for untracked)."""
         if not self._meta_resolved:
             self._resolve_meta()
+        self._maybe_settle_optimistic()
         self.async_write_ha_state()
+
+    def _maybe_settle_optimistic(self) -> None:
+        """Drop the optimistic target once the real device has settled.
+
+        Landed on target -> the real value takes over seamlessly. Stopped
+        somewhere else (a stop command / superseded move) -> show reality.
+        """
+        if self._optimistic is None:
+            return
+        pos = self._source_position()
+        if pos is None:
+            return
+        st = self.hass.states.get(self._source)
+        moving = bool(st and st.state in (STATE_OPENING, STATE_CLOSING))
+        landed = abs(pos - self._optimistic) <= 3
+        stopped_elsewhere = not moving and self._optimistic_start is not None and abs(pos - self._optimistic_start) > 3
+        if landed or stopped_elsewhere:
+            self._optimistic = None
+            self._cancel_optimistic_timer()
+
+    def _cancel_optimistic_timer(self) -> None:
+        """Cancel the outstanding optimistic safety-valve timer, if any."""
+        if self._optimistic_unsub is not None:
+            self._optimistic_unsub()
+            self._optimistic_unsub = None
 
     @callback
     def _live_event(self, event: Event) -> None:
@@ -207,6 +242,8 @@ class ShadeCover(CoverEntity):
                 if self._live >= CLAMP_HIGH:
                     return 100
                 return self._live
+        if self._optimistic is not None:
+            return self._optimistic  # untracked shade mid-command: sit on the target
         return self._source_position()
 
     @property
@@ -297,6 +334,23 @@ class ShadeCover(CoverEntity):
         if self._tracked and self._live is None:
             self._hold = self._source_position()
             self.async_write_ha_state()
+        if not self._tracked:
+            # RYSE reports endpoints only: show the target for the whole travel.
+            self._optimistic = max(0, min(100, target))
+            self._optimistic_start = self._source_position()
+            self._cancel_optimistic_timer()
+            self.async_write_ha_state()
+
+            @callback
+            def _expire(_now) -> None:
+                # Safety valve: if the device never settles (command lost),
+                # fall back to reality instead of lying forever.
+                self._optimistic_unsub = None
+                if self._optimistic is not None:
+                    self._optimistic = None
+                    self.async_write_ha_state()
+
+            self._optimistic_unsub = async_call_later(self.hass, 120, _expire)
         # Endpoints via open/close (the gateway reports the real ramp); an exact
         # position via set_position (gateway reports the target ~immediately).
         if target >= 100:
