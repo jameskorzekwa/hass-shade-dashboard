@@ -518,17 +518,9 @@ class ShadeDashboardCard extends BaseElement {
     };
     const chip = (id) =>
       `<span style="display:inline-block;font-size:11px;color:#4A4237;background:#F0EADE;border:1px solid #E2DACB;border-radius:7px;padding:2px 8px;margin:2px 4px 0 0">${nameOf(id)}</span>`;
-    const sunTest = this._builtMobile ? "" : `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
-      <div style="font-weight:700;font-size:13.5px;color:#26211B">Sun test <span style="font-weight:500;color:#8A8177;font-size:11px">· preview the window light at any time of day</span></div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <button data-suntest-on style="padding:8px 14px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;cursor:pointer">Off</button>
-        <button data-suntest-play title="Play the day" style="width:34px;height:34px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:13px;cursor:pointer">▶</button>
-        <input data-suntest-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:120px">
-        <span data-suntest-time style="font:600 12px ui-monospace,Menlo,monospace;min-width:64px">off</span>
-        <select data-suntest-season style="padding:7px 9px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
-          <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
-        </select>
-      </div>
+    const sunTest = this._builtMobile ? "" : `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1"><div style="font-weight:700;font-size:13.5px;color:#26211B">Sun test</div><div style="font-size:11px;color:#8A8177">Shows a time-of-day scrubber on the main views to preview the window light</div></div>
+      <button data-suntest-on style="padding:8px 16px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;cursor:pointer">Off</button>
     </div>`;
     return sunTest + `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
       ORDER.filter((g) => groups[g])
@@ -616,6 +608,15 @@ class ShadeDashboardCard extends BaseElement {
     // stronger direct leak on panes the sun is actually near. Same horizon
     // bell as the sky tint, gated by daylight/ridge like the direct light.
     const ambient = 0.55 * Math.exp(-Math.pow((el == null ? 90 : el) - 1, 2) / 16) * dayFade;
+    // Diffuse daylight: the sky lights every facade all day, so a fully
+    // closed shade still glows through its weave and leaks at the edges
+    // even when the sun is nowhere near that pane (fades out after dusk).
+    const elv = el == null ? 30 : el;
+    const daylight = Math.min(1, Math.max(0, (elv + 6) / 14)); // dark below -6, full by ~8 deg
+    const dayGlow = 0.34 * daylight;
+    // Admitted-light bookkeeping for the interior-brightness simulation:
+    // every pane contributes (glass area) x (how open it is) x (light on it).
+    let sumArea = 0, sumOpen = 0, sumBeam = 0;
     for (const slot of Object.keys(this._layout.shades)) {
       const under = root.querySelector(`[data-sunlit="${slot}"]`);
       const over = root.querySelector(`[data-sunglow="${slot}"]`);
@@ -637,6 +638,15 @@ class ShadeDashboardCard extends BaseElement {
         cy = ((g.z2 - p.z) / (g.z2 - g.z1)) * 100;
         pxFt = w / (g.x2 - g.x1);
       }
+      if (g) {
+        const area = (g.x2 - g.x1) * (g.z2 - g.z1);
+        const posNow = this._dispPos(slot);
+        const openFrac = posNow == null ? 0 : posNow / 100;
+        const admit = openFrac + (1 - openFrac) * 0.15; // weave passes ~15%
+        sumArea += area;
+        sumOpen += area * admit;
+        sumBeam += area * admit * I;
+      }
       const R = 8 * pxFt, core = 1.2 * pxFt;
       if (I > 0.02 && w) {
         css =
@@ -651,7 +661,7 @@ class ShadeDashboardCard extends BaseElement {
       // top gap, and a wash through the weave. Direct-sun leak, floored by
       // the ambient golden-hour leak. The glow layer is a child of the
       // fabric, so it exactly covers the shaded region at any position.
-      const G = Math.max(I, w ? ambient : 0);
+      const G = Math.max(I, w ? Math.max(ambient, dayGlow) : 0);
       if (over && G > 0.02) {
         const pos = this._dispPos(slot);
         const covered = pos == null ? 1 : (100 - pos) / 100;
@@ -668,13 +678,30 @@ class ShadeDashboardCard extends BaseElement {
               `rgba(255,236,182,${(0.3 * G).toFixed(3)}) 0,` +
               `rgba(255,214,142,${(0.22 * G).toFixed(3)}) ${(R * 0.4).toFixed(0)}px,` +
               `rgba(255,200,120,0) ${R.toFixed(0)}px)`
-            : `linear-gradient(180deg,rgba(255,236,190,${(0.14 * G).toFixed(3)}) 0,rgba(255,232,184,${(0.08 * G).toFixed(3)}) 100%)`;
+            : `linear-gradient(180deg,rgba(255,240,205,${(0.55 * G).toFixed(3)}) 0,rgba(255,236,195,${(0.4 * G).toFixed(3)}) 100%)`;
           cssOver = [edge(0, Math.min(1, 0.95 * G)), edge(90, aL), edge(270, aR), edge(180, 0.45 * G), wash].join(",");
         }
       }
       if (under) under.style.background = css;
       if (over) over.style.background = cssOver;
     }
+    // Interior brightness (exposure adaptation): the more daylight pours in,
+    // the darker the room surfaces read; close shades (or let the sun set)
+    // and the inside brightens — brightest at night. Diffuse skylight enters
+    // any open pane; the direct-beam term weighs panes the sun is actually
+    // hitting. Positions are live, so the room shifts as shades travel.
+    const diffuseIn = sumArea ? (sumOpen / sumArea) * daylight : 0;
+    const directIn = sumArea ? Math.min(1, sumBeam / (sumArea * 0.12)) : 0;
+    this._setInterior(Math.min(1, 0.6 * diffuseIn + 0.4 * directIn));
+  }
+  // Tint the room chrome between cozy-bright (no light coming in) and dim
+  // (bright day pouring through open glass). Smoothed so shade moves and
+  // sunset read as a slow drift.
+  _setInterior(light) {
+    const frame = this.shadowRoot && this.shadowRoot.querySelector(".frame");
+    if (!frame || this._builtMobile) return;
+    if (!frame.style.transition) frame.style.transition = "background 1.6s ease";
+    frame.style.background = hexMix("#FFFCF3", "#DED4C0", light);
   }
   // Sky outside the windows: the glass gradients tint continuously with the
   // sun — deep blue-grey night, warm dawn/dusk horizon color on EVERY pane
@@ -728,13 +755,16 @@ class ShadeDashboardCard extends BaseElement {
     if (!scrub) return;
     const season = root.querySelector("[data-suntest-season]");
     const sync = () => { this._updateSunTestUi(); this._update(); };
-    root.querySelector("[data-suntest-on]").addEventListener("click", () => {
+    const setOn = (on) => {
       const t = this._sunTest;
-      t.on = !t.on;
+      t.on = on;
       t.playing = false;
       if (t.on && t.min == null) { const n = new Date(); t.min = n.getHours() * 60 + n.getMinutes(); }
       sync();
-    });
+    };
+    root.querySelector("[data-suntest-on]").addEventListener("click", () => setOn(!this._sunTest.on));
+    const offBtn = root.querySelector("[data-suntest-off]");
+    if (offBtn) offBtn.addEventListener("click", () => setOn(false));
     scrub.addEventListener("input", () => {
       this._sunTest.min = Number(scrub.value);
       this._sunTest.on = true;
@@ -767,6 +797,8 @@ class ShadeDashboardCard extends BaseElement {
     const t = this._sunTest;
     const scrub = root.querySelector("[data-suntest-scrub]");
     if (!scrub) return;
+    const bar = root.querySelector("[data-suntest-bar]");
+    if (bar) bar.style.display = t.on && this._tab !== "settings" ? "flex" : "none";
     if (t.min != null && !t.scrubbing) scrub.value = String(Math.round(t.min));
     const lab = root.querySelector("[data-suntest-time]");
     if (lab) lab.textContent = t.on ? this._fmtMin(Math.min(1290, Math.max(270, t.min == null ? 720 : t.min))) : "off";
@@ -876,6 +908,17 @@ class ShadeDashboardCard extends BaseElement {
       <button data-tab="main" class="pill">Main Floor</button>
       <button data-tab="up" class="pill">Upstairs</button>
       <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:17px">⚙</button>
+    </div>
+
+    <div data-suntest-bar style="display:none;align-items:center;gap:10px;padding:9px 12px;border:1px solid #E8C9A4;border-radius:12px;background:#FBF4E8">
+      <span style="font-size:12px;font-weight:700;color:#A06B2E">☀ Sun test</span>
+      <button data-suntest-play title="Play the day" style="width:32px;height:32px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:13px;cursor:pointer">▶</button>
+      <input data-suntest-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:120px">
+      <span data-suntest-time style="font:600 12px ui-monospace,Menlo,monospace;min-width:64px;text-align:right"></span>
+      <select data-suntest-season style="padding:7px 9px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
+        <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
+      </select>
+      <button data-suntest-off title="Exit sun test" style="width:32px;height:32px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#8A8177;font-size:13px;cursor:pointer">✕</button>
     </div>
 
     <div data-panel="main" style="flex-direction:column;gap:8px;flex:1;min-height:0;min-width:0">
@@ -1357,6 +1400,7 @@ class ShadeDashboardCard extends BaseElement {
     // The per-window sunlight + outside sky ride the same tick.
     this._updateSunLight(az, elev);
     this._updateSky(az, elev);
+    this._updateSunTestUi();
   }
 
   _updateBar() {
