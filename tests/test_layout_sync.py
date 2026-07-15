@@ -113,3 +113,31 @@ def test_groups_resolve_to_entities() -> None:
     mapped = {abstract_entity(slot) for slot in SHADES}
     for entities in cfg["groups"].values():
         assert set(entities) <= mapped
+
+
+def test_sun_geo_synced_with_card() -> None:
+    """The card's sun_geo mirror (strict JSON in DEFAULT_LAYOUT) matches const.py."""
+    import json
+
+    from custom_components.shade_dashboard.const import SUN_GEO
+
+    text = CARD_JS.read_text()
+    block = re.search(r"sun_geo:\s*(\{.*?\n  \}),", text, re.DOTALL)
+    assert block, "could not locate the sun_geo block in DEFAULT_LAYOUT"
+    assert json.loads(block.group(1)) == SUN_GEO
+    # and the panel config hands the same physics to the card
+    assert build_panel_config()["sun_geo"] == SUN_GEO
+
+
+def test_sun_geo_physics_sane() -> None:
+    """Wall normals and viewer geometry as measured for this house."""
+    from custom_components.shade_dashboard.const import SUN_GEO
+
+    assert abs(SUN_GEO["lat"] - 39.582804) < 1e-9
+    assert abs(SUN_GEO["lon"] - -105.249572) < 1e-9
+    walls = SUN_GEO["walls"]
+    assert walls["west"]["az"] == 295.0 and walls["south"]["az"] == 201.0
+    assert walls["up_west"]["az"] == 295.0  # same face, one storey up
+    assert walls["north"]["az"] == 25.0  # west + 90
+    for wall in walls.values():
+        assert 3 <= wall["viewer_d"] <= 40 and 3 <= wall["eye_h"] <= 7

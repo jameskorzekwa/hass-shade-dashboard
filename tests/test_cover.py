@@ -12,6 +12,7 @@ from custom_components.shade_dashboard.const import (
     DOMAIN,
     LIVE_EVENT,
     SHADES,
+    TRACKER_KEY,
     _tracked_entities,
     abstract_entity,
 )
@@ -26,6 +27,11 @@ async def _setup(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    # the conftest tracker is a MagicMock; a bare mock's is_calibrating(...)
+    # returns a truthy MagicMock, which would block every command
+    tracker = hass.data.get(TRACKER_KEY)
+    if tracker is not None and hasattr(tracker.is_calibrating, "return_value"):
+        tracker.is_calibrating.return_value = False
 
 
 async def test_a_cover_per_shade(hass: HomeAssistant) -> None:
@@ -122,3 +128,49 @@ async def test_command_routes_to_source() -> None:
     assert domain == "cover"
     assert service == "close_cover"
     assert data["entity_id"] == source
+
+
+async def test_untracked_optimistic_target_during_travel(hass: HomeAssistant) -> None:
+    """Commanding the RYSE shade shows the TARGET while it travels.
+
+    The device reports endpoint positions only — during travel its
+    current_position sits at the start value, which used to snap the card's
+    fabric back mid-move. The abstraction must sit on the commanded target
+    until the device lands, then hand off to the real value.
+    """
+    await _setup(hass)
+    source = SHADES["mbr1"]
+    ent = abstract_entity("mbr1")
+
+    await hass.services.async_call("cover", "set_cover_position", {"entity_id": ent, "position": 40}, blocking=True)
+    await hass.async_block_till_done()
+    # source still reports the stale start (100, "open") -> we show the target
+    assert hass.states.get(ent).attributes["current_position"] == 40
+
+    # device starts moving; position still stale -> keep showing the target
+    hass.states.async_set(source, "closing", {"current_position": 100, "friendly_name": source})
+    await hass.async_block_till_done()
+    assert hass.states.get(ent).attributes["current_position"] == 40
+
+    # device lands on (about) the target -> real value takes over
+    hass.states.async_set(source, "open", {"current_position": 41, "friendly_name": source})
+    await hass.async_block_till_done()
+    assert hass.states.get(ent).attributes["current_position"] == 41
+
+
+async def test_untracked_optimistic_clears_when_stopped_elsewhere(hass: HomeAssistant) -> None:
+    """If the shade stops somewhere else (stop/supersede), reality wins."""
+    await _setup(hass)
+    source = SHADES["mbr1"]
+    ent = abstract_entity("mbr1")
+
+    await hass.services.async_call("cover", "set_cover_position", {"entity_id": ent, "position": 0}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(ent).attributes["current_position"] == 0
+
+    # travels, then stops well short of the target (e.g. user hit stop)
+    hass.states.async_set(source, "closing", {"current_position": 100, "friendly_name": source})
+    await hass.async_block_till_done()
+    hass.states.async_set(source, "open", {"current_position": 55, "friendly_name": source})
+    await hass.async_block_till_done()
+    assert hass.states.get(ent).attributes["current_position"] == 55

@@ -68,8 +68,24 @@ const DEFAULT_LAYOUT = {
   sun: {
     elevation_entity: "sensor.home2_sun_elevation",
     azimuth_entity: "sensor.home2_sun_azimuth",
+    // sun2 (terrain/elevation-corrected) sunrise & sunset timestamps.
+    rising_entity: "sensor.home2_sun_rising",
+    setting_entity: "sensor.home2_sun_setting",
     west_lux: "sensor.west_light_level",
     south_lux: "sensor.south_light_level",
+  },
+  // Physics for the window sunlight (mirror of const.py SUN_GEO). Wall azimuths
+  // are the walls' true-north outward normals; viewer params are the eye point
+  // the projection renders from (feet). Strict JSON — test_layout_sync parses it.
+  sun_geo: {
+    "lat": 39.582804,
+    "lon": -105.249572,
+    "walls": {
+      "west": {"az": 295.0, "viewer_x": 8.34, "viewer_d": 18.0, "eye_h": 5.4},
+      "south": {"az": 201.0, "viewer_x": 9.5, "viewer_d": 14.0, "eye_h": 5.4},
+      "north": {"az": 25.0, "viewer_x": 4.75, "viewer_d": 12.0, "eye_h": 5.4},
+      "up_west": {"az": 295.0, "viewer_x": 8.0, "viewer_d": 7.0, "eye_h": 5.4}
+    }
   },
   toggles: {
     movie: { title: "Movie Mode", desc_on: "On · everything closed", desc_off: "Off", entity: "input_boolean.movie_mode" },
@@ -104,14 +120,24 @@ function fireEvent(node, type, detail) {
 }
 
 // --- static DOM builders (styles mirror the design prototype) ----------------
-const fabric = (slot, hem) =>
-  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease"></div>`;
+const fabric = (slot, hem, glow) =>
+  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease">` +
+    (glow ? `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` : "") +
+  `</div>`;
 const offline = (slot) =>
   `<div data-offline="${slot}" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:${HATCH}"><span style="writing-mode:vertical-rl;font:700 10px ui-monospace,Menlo,monospace;letter-spacing:2px;color:#A2988A">OFFLINE</span></div>`;
 const flash = (slot, clip) =>
   `<div data-flash="${slot}" class="sd-flash-ov" style="${clip ? `clip-path:url(#sd-clip-${slot})` : "border-radius:3px"}"></div>`;
+const sunUnder = (slot) => `<div data-sunlit="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
+// Linear mix of two #RRGGBB colors (t: 0 -> a, 1 -> b), for the sky tint.
+// Returns #RRGGBB so mixes can be chained (rgb() output broke the 2nd parse).
+const hexMix = (a, b, t) => {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (sh) => Math.round(((pa >> sh) & 255) + (((pb >> sh) & 255) - ((pa >> sh) & 255)) * t);
+  return `#${((1 << 24) + (ch(16) << 16) + (ch(8) << 8) + ch(0)).toString(16).slice(1)}`;
+};
 const winRect = (slot, glass) =>
-  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 4)}${flash(slot)}${offline(slot)}</div>`;
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
 const label = (slot) =>
   `<span data-label="${slot}" style="font:700 13px ui-monospace,Menlo,monospace;color:#6E6558;letter-spacing:.3px"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
@@ -146,6 +172,12 @@ const mobileDoorTile = (slot) =>
   `</div>`;
 // In-motion flash CSS shared by both layouts.
 const FLASH_CSS = `
+  /* Every button gives hover + press feedback: brightness composes over any
+     inline background (light or dark), and the tiny press-scale reads as a
+     physical click. Touch devices get the :active state on tap. */
+  button { transition: filter .12s ease, transform .06s ease; }
+  button:hover { filter: brightness(.94); }
+  button:active { filter: brightness(.85); transform: scale(.97); }
   @keyframes sd-pulse { 0%,100% { outline-color: rgba(198,123,59,.95); } 50% { outline-color: rgba(198,123,59,.15); } }
   .sd-moving { outline: 3px solid rgba(198,123,59,.95); outline-offset: 1px; border-radius: 3px; animation: sd-pulse .95s ease-in-out infinite; }
   .sd-flash-ov { position:absolute; inset:0; background:${ACCENT}; opacity:0; pointer-events:none; }
@@ -155,6 +187,88 @@ const FLASH_CSS = `
   .sd-flash-ring-on { animation: sd-ring-pulse .95s ease-in-out infinite; }
   @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
   .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }`;
+// --- Solar position + wall projection (Sun tab & live sun dot) --------------
+// NOAA solar position algorithm (~0.1 deg). Validated against the sun2
+// integration's sensors for this house (tests/js/solar.test.mjs pins reference
+// values computed independently). Exported so the Node test can import it.
+export function solarPos(dateMs, lat, lon) {
+  const rad = Math.PI / 180;
+  const d = new Date(dateMs);
+  let y = d.getUTCFullYear(), m = d.getUTCMonth() + 1;
+  const day = d.getUTCDate() + (d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600) / 24;
+  if (m <= 2) { y -= 1; m += 12; }
+  const A = Math.floor(y / 100), B = 2 - A + Math.floor(A / 4);
+  const jd = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + day + B - 1524.5;
+  const T = (jd - 2451545.0) / 36525.0;
+  const L0 = (280.46646 + T * (36000.76983 + 0.0003032 * T)) % 360;
+  const M = 357.52911 + T * (35999.05029 - 0.0001537 * T);
+  const e = 0.016708634 - T * (0.000042037 + 0.0000001267 * T);
+  const Mr = M * rad;
+  const C = (1.914602 - T * (0.004817 + 0.000014 * T)) * Math.sin(Mr)
+    + (0.019993 - 0.000101 * T) * Math.sin(2 * Mr) + 0.000289 * Math.sin(3 * Mr);
+  const omega = 125.04 - 1934.136 * T;
+  const lam = (L0 + C - 0.00569 - 0.00478 * Math.sin(omega * rad)) * rad;
+  const eps0 = 23 + (26 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813))) / 60) / 60;
+  const eps = (eps0 + 0.00256 * Math.cos(omega * rad)) * rad;
+  const decl = Math.asin(Math.sin(eps) * Math.sin(lam));
+  const yv = Math.tan(eps / 2) ** 2;
+  const L0r = L0 * rad;
+  const eot = 4 / rad * (yv * Math.sin(2 * L0r) - 2 * e * Math.sin(Mr) + 4 * e * yv * Math.sin(Mr) * Math.cos(2 * L0r)
+    - 0.5 * yv * yv * Math.sin(4 * L0r) - 1.25 * e * e * Math.sin(2 * Mr));
+  const mins = d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60;
+  const tst = (((mins + eot + 4 * lon) % 1440) + 1440) % 1440;
+  const ha = (tst / 4 < 0 ? tst / 4 + 180 : tst / 4 - 180) * rad;
+  const latr = lat * rad;
+  const zen = Math.acos(Math.sin(latr) * Math.sin(decl) + Math.cos(latr) * Math.cos(decl) * Math.cos(ha));
+  let el = 90 - zen / rad;
+  if (el > -0.575 && el < 85) el += (1.02 / Math.tan((el + 10.3 / (el + 5.11)) * rad)) / 60; // refraction
+  let az = Math.acos(((Math.sin(latr) * Math.cos(zen)) - Math.sin(decl)) / (Math.cos(latr) * Math.sin(zen))) / rad;
+  az = ha > 0 ? (180 + az) % 360 : (540 - az) % 360;
+  return { az, el };
+}
+
+// Project the sun onto a wall plane from the configured viewer eye point.
+// Returns wall coordinates in feet (x across the run, z above the floor) and
+// `behind` when the sun is on the other side of the wall plane.
+export function sunOnWall(wall, az, el) {
+  const rad = Math.PI / 180;
+  let d = az - wall.az;
+  d = ((d + 540) % 360) - 180; // normalize to [-180, 180)
+  if (Math.abs(d) >= 88 || el <= -1.5) return { behind: true, rel: d };
+  const x = wall.viewer_x + wall.viewer_d * Math.tan(d * rad);
+  const z = wall.eye_h + (wall.viewer_d * Math.tan(el * rad)) / Math.cos(d * rad);
+  return { x, z, rel: d, behind: false };
+}
+
+// Real glass rectangles per shade, in wall feet (x across the run, z above that
+// storey's floor) — this drives the per-window sunlight. West bays sit on a
+// 4.75 ft pitch: lower glass 0.3-8 ft, angled clerestories following the
+// roofline (z = 18.4 - 0.408x; the angled panes use their bounding box, plenty
+// for a light gradient). South mirrors the drawn layout (door + chimney bays
+// carry no shade). North is the west wall's +90 (az 25). Upstairs is the same
+// west face one storey up, in its own floor-relative z. lrh1/mbr1 have no
+// known orientation and stay unlit.
+const SIM_BAYS = [[0.3, 4.45], [5.05, 9.2], [9.8, 13.95], [14.55, 18.7]];
+const SLOT_GLASS = (() => {
+  const roof = (x) => 18.4 - 0.408 * x;
+  const out = {};
+  ["u4", "u5", "u6", "u7"].forEach((s, i) => { const [a, b] = SIM_BAYS[i]; out[s] = { wall: "west", x1: a, x2: b, z1: 9, z2: roof(a) }; });
+  ["l3", "l4", "l5", "l6"].forEach((s, i) => { const [a, b] = SIM_BAYS[i]; out[s] = { wall: "west", x1: a, x2: b, z1: 0.3, z2: 8 }; });
+  out.u1 = { wall: "south", x1: SIM_BAYS[0][0], x2: SIM_BAYS[0][1], z1: 9, z2: 18.4 };
+  out.u2 = { wall: "south", x1: SIM_BAYS[1][0], x2: SIM_BAYS[1][1], z1: 9, z2: 18.4 };
+  out.u3 = { wall: "south", x1: SIM_BAYS[3][0], x2: SIM_BAYS[3][1], z1: 9, z2: 18.4 };
+  out.l1 = { wall: "south", x1: SIM_BAYS[1][0], x2: SIM_BAYS[1][1], z1: 0.3, z2: 8 };
+  out.l2 = { wall: "south", x1: SIM_BAYS[3][0], x2: SIM_BAYS[3][1], z1: 0.3, z2: 8 };
+  out.l7 = { wall: "north", x1: 0.3, x2: 4.45, z1: 0.3, z2: 8 };
+  out.l8 = { wall: "north", x1: 5.05, x2: 9.2, z1: 0.3, z2: 8 };
+  [["uh1", 0.25], ["uh2", 3.45], ["uh3", 6.65], ["ko1", 10.45], ["ko2", 13.65]].forEach(([s, x]) => {
+    out[s] = { wall: "up_west", x1: x, x2: x + 2.7, z1: 2, z2: 7 };
+  });
+  return out;
+})();
+// Fallback WNW ridge height (deg); normally derived live from the sun2 sunset time.
+const RIDGE_EL_FALLBACK = 2.2;
+
 // SVG path for a rounded polygon (corner radius r) through the given [x,y] points.
 const roundedPath = (pts, r) => {
   const n = pts.length;
@@ -214,7 +328,10 @@ const winAngled = (slot, h) => {
       // closed its hem sits right on top of the bottom frame (like the rectangle
       // windows) instead of being clipped away.
       `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
-        `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease"></div>` +
+        sunUnder(slot) +
+        `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
+          `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` +
+        `</div>` +
       `</div>` +
       flash(slot, true) +
     `</div>`
@@ -236,7 +353,11 @@ const toggleRow = (key, t) =>
     `<span data-toggle-switch="${key}" style="flex-shrink:0;width:40px;height:23px;border-radius:999px;background:#D9D2C4;position:relative;transition:background .2s"><span data-toggle-knob="${key}" style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#FFF;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></span>` +
   `</button>`;
 
-class ShadeDashboardCard extends HTMLElement {
+// In Node (tests/js/solar.test.mjs imports this module for the solar math)
+// there is no DOM — stub the base class; HA always provides the real one.
+const BaseElement = typeof HTMLElement !== "undefined" ? HTMLElement : class {};
+
+class ShadeDashboardCard extends BaseElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
@@ -256,6 +377,9 @@ class ShadeDashboardCard extends HTMLElement {
     // the cover's opening/closing state and stops exactly when the shade stops.
     this._commanded = {};
     this._movedSince = {};
+    // Hidden sun-test mode (Settings): overrides the sun2 angles with
+    // computed positions for a scrubbable time of day. Off = live sensors.
+    this._sunTest = { on: false, playing: false, season: "today", min: null };
   }
 
   setConfig(config) {
@@ -400,7 +524,11 @@ class ShadeDashboardCard extends HTMLElement {
     };
     const chip = (id) =>
       `<span style="display:inline-block;font-size:11px;color:#4A4237;background:#F0EADE;border:1px solid #E2DACB;border-radius:7px;padding:2px 8px;margin:2px 4px 0 0">${nameOf(id)}</span>`;
-    return `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
+    const sunTest = this._builtMobile ? "" : `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1"><div style="font-weight:700;font-size:13.5px;color:#26211B">Sun test</div><div style="font-size:11px;color:#8A8177">Shows a time-of-day scrubber on the main views to preview the window light</div></div>
+      <button data-suntest-on style="padding:8px 16px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;cursor:pointer">Off</button>
+    </div>`;
+    return sunTest + `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
       ORDER.filter((g) => groups[g])
         .map((g) => {
           const members = groups[g] || [];
@@ -412,17 +540,324 @@ class ShadeDashboardCard extends HTMLElement {
         .join("");
   }
 
+  // --- Sunlight through the windows -------------------------------------------
+  // The sun is not a separate view: every window carries two light layers (one
+  // under the shade fabric, one — much dimmer — above it) whose radial gradient
+  // is positioned at the sun's true location in THAT window's own glass
+  // coordinates (real feet -> local %). Because the mapping is per-window, the
+  // effect is identical in every layout, including the phone's wrapped grids.
+  // Brightness falls off with the sun's distance from each pane and fades out
+  // as the sun drops to the WNW ridge. Physics: solarPos + sunOnWall, config
+  // in const.SUN_GEO (calibrated from the 2026-07-14 19:58 photo).
+  _geoWalls() {
+    return (this._layout.sun_geo && this._layout.sun_geo.walls) || {};
+  }
+  _geoLatLon() {
+    const g = this._layout.sun_geo || {};
+    return [g.lat, g.lon];
+  }
+  // WNW ridge height: the sun's elevation at the sun2 (terrain-corrected)
+  // sunset instant — i.e. how high the mountains it sets behind are. The same
+  // angular threshold applies on both storeys (the ridge is distant, so one
+  // floor of height changes its apparent elevation by well under 0.1 deg).
+  _ridgeEl() {
+    const [lat, lon] = this._geoLatLon();
+    const ms = this._sunTime((this._layout.sun || {}).setting_entity);
+    if (ms == null || lat == null) return RIDGE_EL_FALLBACK;
+    const el = solarPos(ms, lat, lon).el;
+    return el > 0 && el < 8 ? el : RIDGE_EL_FALLBACK;
+  }
+  _simDate(minutes) {
+    const now = new Date();
+    const MONTH = { jun: [5, 21], sep: [8, 21], dec: [11, 21] };
+    const md = MONTH[(this._sunTest || {}).season];
+    const base = md ? new Date(now.getFullYear(), md[0], md[1]) : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    base.setMinutes(minutes);
+    return base;
+  }
+  _fmtMin(min) {
+    const h = Math.floor(min / 60) % 24, m = Math.round(min % 60);
+    const hh = ((h + 11) % 12) + 1;
+    return `${hh}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  }
+  // Current sun angles: the sun2 sensors normally; the hidden test mode
+  // (Settings -> Sun test) overrides them with computed positions so the
+  // light can be scrubbed through any day.
+  _sunAzEl() {
+    const t = this._sunTest;
+    if (t && t.on) {
+      const [lat, lon] = this._geoLatLon();
+      if (lat != null) {
+        const d = this._simDate(Math.min(1290, Math.max(270, t.min == null ? 720 : t.min)));
+        const p = solarPos(d.getTime(), lat, lon);
+        return { az: p.az, el: p.el, test: true };
+      }
+    }
+    const cfg = this._layout.sun || {};
+    return {
+      az: this._sunVal(cfg.azimuth_entity, "azimuth"),
+      el: this._sunVal(cfg.elevation_entity, "elevation"),
+      test: false,
+    };
+  }
+  _updateSunLight(az, el) {
+    const root = this.shadowRoot;
+    if (!root) return;
+    const walls = this._geoWalls();
+    const ridge = this._ridgeEl();
+    // Below the WNW ridge late in the day (or below the horizon any time):
+    // lights out, with a soft fade over the last ~1.5 deg of descent.
+    const gate = az != null && az > 240 ? ridge - 0.2 : -0.3;
+    const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.5));
+    // Ambient golden-hour glow: at sunrise/sunset EVERY covered shade leaks a
+    // little warm light around its edges (the whole sky is lit), on top of the
+    // stronger direct leak on panes the sun is actually near. Same horizon
+    // bell as the sky tint, gated by daylight/ridge like the direct light.
+    const ambient = 0.55 * Math.exp(-Math.pow((el == null ? 90 : el) - 1, 2) / 16) * dayFade;
+    // Diffuse daylight: the sky lights every facade all day, so a fully
+    // closed shade still glows through its weave and leaks at the edges
+    // even when the sun is nowhere near that pane (fades out after dusk).
+    const elv = el == null ? 30 : el;
+    const daylight = Math.min(1, Math.max(0, (elv + 6) / 14)); // dark below -6, full by ~8 deg
+    const dayGlow = 0.34 * daylight;
+    // Light color temperature: amber near the horizon (sunrise/dusk), bright
+    // white through the day. One blend per tick, shared by all the layers.
+    const warmth = Math.exp(-Math.pow(elv - 1, 2) / 20);
+    const wmix = (w, a) => w.map((c, i) => Math.round(c + (a[i] - c) * warmth)).join(",");
+    const LC = {
+      uCore: wmix([255, 253, 248], [255, 238, 196]),
+      uIn: wmix([255, 249, 238], [255, 219, 150]),
+      uMid: wmix([255, 243, 228], [255, 199, 124]),
+      uOut: wmix([255, 240, 222], [255, 186, 108]),
+      eCore: wmix([255, 253, 247], [255, 240, 200]),
+      eMid: wmix([255, 251, 243], [255, 233, 186]),
+      eOut: wmix([255, 248, 238], [255, 227, 176]),
+      wCore: wmix([255, 251, 243], [255, 235, 185]),
+      wMid: wmix([255, 246, 232], [255, 214, 150]),
+      aTop: wmix([255, 252, 245], [255, 238, 200]),
+      aBot: wmix([255, 250, 241], [255, 233, 192]),
+    };
+    // Admitted-light bookkeeping for the interior-brightness simulation:
+    // every pane contributes (glass area) x (how open it is) x (light on it).
+    let sumArea = 0, sumOpen = 0, sumBeam = 0;
+    for (const slot of Object.keys(this._layout.shades)) {
+      const under = root.querySelector(`[data-sunlit="${slot}"]`);
+      const over = root.querySelector(`[data-sunglow="${slot}"]`);
+      if (!under && !over) continue;
+      const host = (under || over).parentElement;
+      const w = host ? host.clientWidth || 0 : 0;
+      let css = "none", cssOver = "none";
+      const g = SLOT_GLASS[slot]; // panes without known orientation still get ambient
+      const wall = g ? walls[g.wall] : null;
+      const p = wall && dayFade > 0 && w ? sunOnWall(wall, az, el) : { behind: true };
+      let I = 0, cx = 50, cy = 50, pxFt = w / 4.15;
+      if (!p.behind) {
+        // Distance from the sun to the nearest point of this pane (0 = on it).
+        const nx = Math.min(g.x2, Math.max(g.x1, p.x));
+        const nz = Math.min(g.z2, Math.max(g.z1, p.z));
+        const dist = Math.hypot(p.x - nx, p.z - nz);
+        I = Math.max(0, 1 - dist / 7) ** 1.15 * dayFade;
+        cx = ((p.x - g.x1) / (g.x2 - g.x1)) * 100;
+        cy = ((g.z2 - p.z) / (g.z2 - g.z1)) * 100;
+        pxFt = w / (g.x2 - g.x1);
+      }
+      if (g) {
+        const area = (g.x2 - g.x1) * (g.z2 - g.z1);
+        const posNow = this._dispPos(slot);
+        const openFrac = posNow == null ? 0 : posNow / 100;
+        const admit = openFrac + (1 - openFrac) * 0.15; // weave passes ~15%
+        sumArea += area;
+        sumOpen += area * admit;
+        sumBeam += area * admit * I;
+      }
+      const R = 8 * pxFt, core = 1.2 * pxFt;
+      if (I > 0.02 && w) {
+        css =
+          `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
+          `rgba(${LC.uCore},${(0.95 * I).toFixed(3)}) 0,` +
+          `rgba(${LC.uIn},${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
+          `rgba(${LC.uMid},${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
+          `rgba(${LC.uOut},0) ${R.toFixed(0)}px)`;
+      }
+      // Light leaking around the shade: bright slivers down the frame sides
+      // (near-sun side hardest), a seep line above the hem, a whisper at the
+      // top gap, and a wash through the weave. Direct-sun leak, floored by
+      // the ambient golden-hour leak. The glow layer is a child of the
+      // fabric, so it exactly covers the shaded region at any position.
+      const G = Math.max(I, w ? Math.max(ambient, dayGlow) : 0);
+      if (over && G > 0.02) {
+        const pos = this._dispPos(slot);
+        const covered = pos == null ? 1 : (100 - pos) / 100;
+        if (covered > 0.02) {
+          const direct = I > 0.02 && I >= ambient;
+          const tL = direct ? Math.max(0, 1 - Math.abs(p.x - g.x1) / 5) : 0.5;
+          const tR = direct ? Math.max(0, 1 - Math.abs(p.x - g.x2) / 5) : 0.5;
+          const aL = Math.min(1, 1.6 * G * (0.35 + 0.9 * tL));
+          const aR = Math.min(1, 1.6 * G * (0.35 + 0.9 * tR));
+          const edge = (deg, a) =>
+            `linear-gradient(${deg}deg,rgba(${LC.eCore},${a.toFixed(3)}) 0,rgba(${LC.eMid},${(a * 0.65).toFixed(3)}) 5px,rgba(${LC.eOut},${(a * 0.3).toFixed(3)}) 13px,rgba(${LC.eOut},0) 26px)`;
+          const wash = direct
+            ? `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${(cy / Math.max(covered, 0.05)).toFixed(1)}%,` +
+              `rgba(${LC.wCore},${(0.3 * G).toFixed(3)}) 0,` +
+              `rgba(${LC.wMid},${(0.22 * G).toFixed(3)}) ${(R * 0.4).toFixed(0)}px,` +
+              `rgba(${LC.uMid},0) ${R.toFixed(0)}px)`
+            : `linear-gradient(180deg,rgba(${LC.aTop},${(0.55 * G).toFixed(3)}) 0,rgba(${LC.aBot},${(0.4 * G).toFixed(3)}) 100%)`;
+          cssOver = [edge(0, Math.min(1, 0.95 * G)), edge(90, aL), edge(270, aR), edge(180, 0.45 * G), wash].join(",");
+        }
+      }
+      if (under) under.style.background = css;
+      if (over) over.style.background = cssOver;
+    }
+    // Interior brightness (exposure adaptation): the more daylight pours in,
+    // the darker the room surfaces read; close shades (or let the sun set)
+    // and the inside brightens — brightest at night. Diffuse skylight enters
+    // any open pane; the direct-beam term weighs panes the sun is actually
+    // hitting. Positions are live, so the room shifts as shades travel.
+    const diffuseIn = sumArea ? sumOpen / sumArea : 0;
+    const directIn = sumArea ? Math.min(1, sumBeam / (sumArea * 0.12)) : 0;
+    const shadesTerm = Math.min(1, 1.3 * (0.6 * diffuseIn + 0.4 * directIn));
+    // Daytime alone pulls the room down (bright outside = inside reads dark);
+    // how far depends on how much the shades let through.
+    this._setInterior(daylight * (0.35 + 0.65 * shadesTerm));
+  }
+  // Tint the room chrome between cozy-bright (night, nothing coming in) and
+  // properly dark (bright day pouring through open glass). Instantaneous —
+  // scrubbing the sun test from noon to night must snap.
+  _setInterior(light) {
+    const frame = this.shadowRoot && this.shadowRoot.querySelector(".frame");
+    if (!frame || this._builtMobile) return;
+    frame.style.transition = "none"; // deployed cards may carry an old inline fade
+    frame.style.background = hexMix("#FFFDF6", "#A3937A", Math.min(1, light));
+  }
+  // Sky outside the windows: the glass gradients tint continuously with the
+  // sun — deep blue-grey night, warm dawn/dusk horizon color on EVERY pane
+  // (the whole sky takes on sunrise/sunset tones, regardless of which way a
+  // wall faces — per the user), and the normal bright glass by day. Desktop
+  // only (the phone layout keeps its static tiles). Live updates step
+  // minute-by-minute, so the change reads as a slow drift; in test-play it
+  // animates smoothly.
+  _updateSky(az, el) {
+    const root = this.shadowRoot;
+    if (!root || this._builtMobile) return;
+    const sm = (x, a, b) => Math.min(1, Math.max(0, (x - a) / (b - a)));
+    const elv = el == null ? 30 : el; // sensors missing -> daytime look
+    const night = 1 - sm(elv, -9, -1);
+    const glow = Math.exp(-Math.pow(elv - 1, 2) / 16); // horizon bell around el ~1
+    const warm = glow * (1 - night * 0.85);
+    let uTop = hexMix("#CBD6DC", "#39445A", night), uBot = hexMix("#E2E2D6", "#4A5468", night);
+    let lTop = hexMix("#D8DFE2", "#39445A", night), lMid = hexMix("#E9E6DB", "#4A5468", night);
+    let lBot = hexMix("#A8B29B", "#3B443C", night);
+    uTop = hexMix(uTop, "#D9AF9B", warm * 0.35); uBot = hexMix(uBot, "#F2BE7F", warm * 0.85);
+    lTop = hexMix(lTop, "#D9AF9B", warm * 0.45); lMid = hexMix(lMid, "#F2BE7F", warm * 0.9);
+    lBot = hexMix(lBot, "#C9A176", warm * 0.5);
+    const sky = {
+      upper: `linear-gradient(180deg,${uTop} 0%,${uBot} 100%)`,
+      lower: `linear-gradient(180deg,${lTop} 0%,${lMid} 55%,${lBot} 100%)`,
+      uTop, uBot,
+    };
+    // The front door's little window follows the same sky.
+    const doorGlass = root.querySelector("[data-doorglass]");
+    if (doorGlass) {
+      let dTop = hexMix("#8FA0A8", "#2E3748", night), dBot = hexMix("#B9BDB0", "#3B4350", night);
+      dTop = hexMix(dTop, "#D9AF9B", warm * 0.4); dBot = hexMix(dBot, "#F2BE7F", warm * 0.7);
+      doorGlass.style.background = `linear-gradient(180deg,${dTop},${dBot})`;
+    }
+    for (const slot of Object.keys(this._layout.shades)) {
+      const win = root.querySelector(`[data-slot="${slot}"]`);
+      if (!win) continue;
+      const stops = win.querySelectorAll(`#sd-g-${slot} stop`); // angled clerestories (SVG)
+      if (stops.length === 2) {
+        stops[0].setAttribute("stop-color", sky.uTop);
+        stops[1].setAttribute("stop-color", sky.uBot);
+      } else {
+        win.style.background = /^u\d/.test(slot) ? sky.upper : sky.lower;
+      }
+    }
+  }
+  // Hidden test controls (Settings tab): scrub/play the sun through a day.
+  _wireSunTest() {
+    const root = this.shadowRoot;
+    const scrub = root.querySelector("[data-suntest-scrub]");
+    if (!scrub) return;
+    const season = root.querySelector("[data-suntest-season]");
+    const sync = () => { this._updateSunTestUi(); this._update(); };
+    const setOn = (on) => {
+      const t = this._sunTest;
+      t.on = on;
+      t.playing = false;
+      if (t.on && t.min == null) { const n = new Date(); t.min = n.getHours() * 60 + n.getMinutes(); }
+      sync();
+    };
+    root.querySelector("[data-suntest-on]").addEventListener("click", () => setOn(!this._sunTest.on));
+    const offBtn = root.querySelector("[data-suntest-off]");
+    if (offBtn) offBtn.addEventListener("click", () => setOn(false));
+    this._sunTestWiredAt = Date.now();
+    scrub.addEventListener("input", () => {
+      // Chrome form-state restoration fires a trusted input on the slider
+      // right after a reload (even with autocomplete=off) — don't let that
+      // blip silently ENABLE test mode with a stale time.
+      if (!this._sunTest.on && Date.now() - this._sunTestWiredAt < 1500) {
+        this._updateSunTestUi();
+        return;
+      }
+      this._sunTest.min = Number(scrub.value);
+      this._sunTest.on = true;
+      sync();
+    });
+    season.addEventListener("change", () => { this._sunTest.season = season.value; sync(); });
+    root.querySelector("[data-suntest-play]").addEventListener("click", () => {
+      const t = this._sunTest;
+      t.playing = !t.playing;
+      t.on = true;
+      if (t.min == null) t.min = 720;
+      if (t.playing) {
+        if (t.min >= 1288) t.min = 270; // restart from dawn
+        const step = () => {
+          if (!t.playing || !this.isConnected) return;
+          t.min = Math.min(1290, t.min + 1.6);
+          if (t.min >= 1290) t.playing = false;
+          this._updateSunTestUi();
+          this._updateSun();
+          if (t.playing) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }
+      sync();
+    });
+    this._updateSunTestUi();
+  }
+  _updateSunTestUi() {
+    const root = this.shadowRoot;
+    const t = this._sunTest;
+    const scrub = root.querySelector("[data-suntest-scrub]");
+    if (!scrub) return;
+    const bar = root.querySelector("[data-suntest-bar]");
+    if (bar) bar.style.display = t.on && this._tab !== "settings" ? "flex" : "none";
+    if (t.min != null && !t.scrubbing) scrub.value = String(Math.round(t.min));
+    const lab = root.querySelector("[data-suntest-time]");
+    if (lab) lab.textContent = t.on ? this._fmtMin(Math.min(1290, Math.max(270, t.min == null ? 720 : t.min))) : "off";
+    const tog = root.querySelector("[data-suntest-on]");
+    if (tog) {
+      tog.textContent = t.on ? "On" : "Off";
+      tog.style.background = t.on ? ACCENT : "#FFFDF9";
+      tog.style.color = t.on ? "#FFF" : "#26211B";
+      tog.style.borderColor = t.on ? ACCENT : "#E2DACB";
+    }
+    const play = root.querySelector("[data-suntest-play]");
+    if (play) play.textContent = t.playing ? "⏸" : "▶";
+  }
+
   _template() {
     const sc = this._layout.scenes;
     const tg = this._layout.toggles || {};
     // South wall: three columns against the chimney
     const south =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
-        `<div style="display:flex;align-items:stretch;gap:14px">` +
+        `<div style="position:relative;display:flex;align-items:stretch;gap:14px">` +
           // col 1: upper 1 over the front door
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">` +
             lowerCol("u1", GLASS_UPPER) +
-            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
+            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div data-doorglass style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
           `</div>` +
           // col 2: upper 2 over lower 1
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u2", GLASS_UPPER)}${lowerCol("l1")}</div>` +
@@ -438,7 +873,7 @@ class ShadeDashboardCard extends HTMLElement {
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
         // gap sized so the angled uppers' bottoms line up with the south-wall uppers'
         // bottoms (the angled columns now include a label row below each window)
-        `<div style="display:flex;flex-direction:column;gap:48px;align-items:center">` +
+        `<div style="position:relative;display:flex;flex-direction:column;gap:48px;align-items:center">` +
           `<div style="display:flex;align-items:flex-end;gap:14px">${angledCol("u4", 190)}${angledCol("u5", 150)}${angledCol("u6", 110)}${angledCol("u7", 70)}</div>` +
           `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("l3")}${lowerCol("l4")}${lowerCol("l5")}${lowerCol("l6")}</div>` +
         `</div>` +
@@ -464,24 +899,24 @@ class ShadeDashboardCard extends HTMLElement {
     const upHall =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
         `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">UPSTAIRS HALLWAY</span>` +
-        `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("uh1")}${divider()}${lowerCol("uh2")}${lowerCol("uh3")}</div>` +
+        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${lowerCol("uh1")}${divider()}${lowerCol("uh2")}${lowerCol("uh3")}</div>` +
         chip("upstairs_hallway", "ALL HALLWAY") +
       `</div>`;
     const office =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
         `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">KYLE'S OFFICE</span>` +
-        `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
+        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
         chip("office", "ALL OFFICE") +
       `</div>`;
 
     return `
 <style>
   /* Scale the whole panel up for easier touch control on the small wall tablet. */
-  :host { display:block; height:100%; zoom:1.15; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; }
+  :host { display:block; height:100%; zoom:1.15; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; color-scheme:light; }
   * { box-sizing:border-box; }
   button { font-family:inherit; }
   .frame { width:100%; height:100%; min-height:640px; background:#F5F1EA; display:flex; overflow:hidden; }
-  .rail { width:210px; flex-shrink:0; background:#FFFDF9; border-right:1px solid #EAE2D4; padding:20px 18px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
+  .rail { width:210px; flex-shrink:0; background:#F3EDDF; border-right:1px solid #E4DBC9; padding:20px 18px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
   .main { flex:1; position:relative; padding:20px 22px; display:flex; flex-direction:column; gap:14px; min-width:0; }
   input[type=range]{ accent-color:${ACCENT}; }
   .pill { padding:9px 18px; border-radius:999px; border:1px solid #E2DACB; cursor:pointer; font-weight:600; font-size:13px; }
@@ -493,15 +928,7 @@ class ShadeDashboardCard extends HTMLElement {
       <div style="font-size:19px;font-weight:700;letter-spacing:.3px">Shades</div>
       <div style="font-size:11px;color:#8A8177;margin-top:2px">22 shades</div>
     </div>
-    <div data-sun-card style="display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2">
-      <div style="position:relative;width:150px;height:66px;overflow:hidden;margin:0 auto">
-        <div style="position:absolute;left:8px;top:8px;width:134px;height:134px;border-radius:50%;border:1.5px dashed #CDC3B2"></div>
-        <div style="position:absolute;left:0;right:0;bottom:0;height:2px;background:#CDC3B2"></div>
-        <div data-sun-dot style="position:absolute;width:12px;height:12px;border-radius:50%;background:${ACCENT};opacity:0;left:69px;top:0;box-shadow:0 0 10px 2px rgba(198,123,59,.45)"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:#8A8177"><span>E</span><span data-sun-time style="color:#26211B;font-weight:600"></span><span>W</span></div>
-      <div data-sun-label style="text-align:center;font-size:11px;color:#8A8177"></div>
-    </div>
+    ${this._sunCardHtml()}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">SCENES</div>
     ${sceneBtn("open_all", sc.open_all)}
     ${sceneBtn("close_all", sc.close_all)}
@@ -514,7 +941,18 @@ class ShadeDashboardCard extends HTMLElement {
     <div style="display:flex;gap:8px;align-items:center">
       <button data-tab="main" class="pill">Main Floor</button>
       <button data-tab="up" class="pill">Upstairs</button>
-      <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:17px">⚙</button>
+      <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:26px;line-height:1"><span style="display:block;transform:translateY(-1px)">⚙</span></button>
+    </div>
+
+    <div data-suntest-bar style="display:none;align-items:center;gap:10px;padding:9px 12px;border:1px solid #E8C9A4;border-radius:12px;background:#FBF4E8">
+      <span style="font-size:12px;font-weight:700;color:#A06B2E">☀ Sun test</span>
+      <button data-suntest-play title="Play the day" style="width:32px;height:32px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:13px;cursor:pointer">▶</button>
+      <input data-suntest-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:120px">
+      <span data-suntest-time style="font:600 12px ui-monospace,Menlo,monospace;min-width:64px;text-align:right"></span>
+      <select data-suntest-season style="padding:7px 9px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
+        <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
+      </select>
+      <button data-suntest-off title="Exit sun test" style="width:32px;height:32px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#8A8177;font-size:13px;cursor:pointer">✕</button>
     </div>
 
     <div data-panel="main" style="flex-direction:column;gap:8px;flex:1;min-height:0;min-width:0">
@@ -534,8 +972,10 @@ class ShadeDashboardCard extends HTMLElement {
         <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Upstairs</span><span style="font-size:12px;color:#8A8177">Main bedroom + hallway + office · 6 shades</span></div>
         <div style="display:flex;gap:8px"><button data-group="upstairs" data-dir="up" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Open floor</button><button data-group="upstairs" data-dir="down" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Close floor</button></div>
       </div>
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:48px">
-        ${mainBedroom}${divider()}${upHall}${divider()}${office}
+      <div style="flex:1;display:flex;align-items:center;justify-content:center">
+        <div style="display:flex;align-items:center;gap:16px">
+          ${mainBedroom}${divider()}${upHall}${divider()}${office}
+        </div>
       </div>
     </div>
 
@@ -589,7 +1029,7 @@ class ShadeDashboardCard extends HTMLElement {
       `<button data-scene="${scene}" style="flex:1;padding:15px;border-radius:12px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:700;font-size:14px;color:#26211B;cursor:pointer">${txt}</button>`;
     return `
 <style>
-  :host { display:block; height:100%; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; }
+  :host { display:block; height:100%; font-family:'Instrument Sans',system-ui,sans-serif; color:#26211B; color-scheme:light; }
   * { box-sizing:border-box; }
   button { font-family:inherit; }
   input[type=range]{ accent-color:${ACCENT}; height:28px; }
@@ -599,10 +1039,11 @@ class ShadeDashboardCard extends HTMLElement {
 <div class="mframe">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;flex-shrink:0">
     <div><div style="font-size:20px;font-weight:700">Shades</div><div data-summary style="font-size:11px;color:#8A8177;margin-top:1px"></div></div>
-    <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">⚙</button>
+    <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:26px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center"><span style="display:block;transform:translateY(-1px)">⚙</span></button>
   </div>
 
   <div data-panel="home" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:flex;flex-direction:column;gap:14px">
+    ${this._sunCardHtml()}
     <div style="display:flex;gap:10px">${bigBtn("open_all", "Open All")}${bigBtn("close_all", "Close All")}</div>
     ${SECTIONS.map(section).join("")}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:4px">MODES</div>
@@ -642,6 +1083,8 @@ class ShadeDashboardCard extends HTMLElement {
     root.querySelectorAll("[data-tab]").forEach((el) =>
       el.addEventListener("click", () => { this._tab = el.getAttribute("data-tab"); this._update(); })
     );
+    // hidden sun-test controls (Settings tab, desktop only)
+    this._wireSunTest();
     // group chips + floor buttons
     root.querySelectorAll("[data-group]").forEach((el) =>
       el.addEventListener("click", () => this._group(el.getAttribute("data-group"), el.getAttribute("data-dir")))
@@ -904,26 +1347,78 @@ class ShadeDashboardCard extends HTMLElement {
     }
     return null;
   }
+  // Format a sun2 timestamp sensor (ISO datetime) as a short local time, e.g. "8:11 PM".
+  _sunTimeStr(entity) {
+    const ms = this._sunTime(entity);
+    return ms == null ? null : new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  // Parse a sun2 timestamp sensor to epoch milliseconds (or null).
+  _sunTime(entity) {
+    const st = entity && this._hass.states[entity];
+    if (!st) return null;
+    const ms = Date.parse(st.state);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  // Shared sun tracker widget — used by both the desktop sidebar and the mobile
+  // home panel. Sunrise/sunset come from sun2; the dot/day-night from sun2 elevation+azimuth.
+  _sunCardHtml() {
+    return `
+    <div data-sun-card style="display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2">
+      <div style="position:relative;width:150px;height:66px;overflow:hidden;margin:0 auto">
+        <div style="position:absolute;left:8px;top:8px;width:134px;height:134px;border-radius:50%;border:1.5px dashed #CDC3B2"></div>
+        <div style="position:absolute;left:0;right:0;bottom:0;height:2px;background:#CDC3B2"></div>
+        <div data-sun-dot style="position:absolute;width:12px;height:12px;border-radius:50%;background:${ACCENT};opacity:0;left:69px;top:0;box-shadow:0 0 10px 2px rgba(198,123,59,.45)"></div>
+      </div>
+      <div data-sun-time style="text-align:center;font:700 16px 'Instrument Sans',system-ui,sans-serif;color:#26211B;white-space:nowrap;line-height:1.2"></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:10.5px;color:#8A8177">
+        <span title="Sunrise (sun2)" style="white-space:nowrap">↑ <span data-sun-rise style="color:#26211B;font-weight:600">—</span></span>
+        <span title="Sunset (sun2)" style="white-space:nowrap"><span data-sun-set style="color:#26211B;font-weight:600">—</span> ↓</span>
+      </div>
+      <div data-sun-label style="text-align:center;font-size:11px;color:#8A8177"></div>
+    </div>`;
+  }
 
   _updateSun() {
     const root = this.shadowRoot;
     const cfg = this._layout.sun || {};
-    const elev = this._sunVal(cfg.elevation_entity, "elevation");
-    const az = this._sunVal(cfg.azimuth_entity, "azimuth");
+    const sunAE = this._sunAzEl();
+    const elev = sunAE.el;
+    const az = sunAE.az;
+    // In test mode "now" is the scrubbed instant, so the tracker dot, label
+    // and window light all move together.
+    const nowMs = sunAE.test ? this._simDate(Math.min(1290, Math.max(270, this._sunTest.min == null ? 720 : this._sunTest.min))).getTime() : Date.now();
     const dot = root.querySelector("[data-sun-dot]");
     const timeEl = root.querySelector("[data-sun-time]");
     const labelEl = root.querySelector("[data-sun-label]");
-    if (timeEl) timeEl.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const riseEl = root.querySelector("[data-sun-rise]");
+    const setEl = root.querySelector("[data-sun-set]");
+    if (timeEl) timeEl.textContent = new Date(nowMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const rise = this._sunTimeStr(cfg.rising_entity);
+    const set = this._sunTimeStr(cfg.setting_entity);
+    if (riseEl && rise) riseEl.textContent = rise;
+    if (setEl && set) setEl.textContent = set;
 
-    const night = elev == null || elev < 0;
+    // Place the sun by fraction of daylight elapsed (sun2 sunrise -> sunset) so it
+    // rides the visible arc all the way to the west horizon at sunset. A raw-azimuth
+    // mapping puts the low evening/morning sun on the horizon corners, which fall
+    // below the 66px arc window and clip the dot out of view entirely.
+    const sunriseMs = this._sunTime(cfg.rising_entity);
+    const sunsetMs = this._sunTime(cfg.setting_entity);
+    let frac = null;
+    if (sunriseMs != null && sunsetMs != null && sunsetMs > sunriseMs) {
+      frac = (nowMs - sunriseMs) / (sunsetMs - sunriseMs);
+    }
+    // Fall back to elevation when sun2 isn't available.
+    const night = frac != null ? frac <= 0 || frac >= 1 : elev == null || elev < 0;
     if (dot) {
-      if (night || az == null) {
+      if (night || frac == null) {
         dot.style.opacity = "0";
       } else {
-        // azimuth 90(E)->270(W) across a semicircle; center (75,75), r=67
-        const t = Math.PI * (Math.min(270, Math.max(90, az)) - 90) / 180;
-        const x = 75 - 67 * Math.cos(t);
-        const y = 75 - 67 * Math.sin(t);
+        // Arc: center (75,75) r67; g0 is where it meets the horizon inside the window.
+        const g0 = 0.1345;
+        const g = g0 + Math.min(1, Math.max(0, frac)) * (Math.PI - 2 * g0);
+        const x = 75 - 67 * Math.cos(g);
+        const y = 75 - 67 * Math.sin(g);
         dot.style.left = `${x - 6}px`;
         dot.style.top = `${y - 6}px`;
         dot.style.opacity = "1";
@@ -936,8 +1431,12 @@ class ShadeDashboardCard extends HTMLElement {
       else if (az != null && az < 135) text = "Morning · sun in the east";
       else if (az != null && az > 225) text = westLux != null && westLux > 30 ? "Evening · glare on west wall" : "Evening · sun in the west";
       else text = "Midday · sun high south";
-      labelEl.textContent = text;
+      labelEl.textContent = (sunAE.test ? "☀ TEST · " : "") + text;
     }
+    // The per-window sunlight + outside sky ride the same tick.
+    this._updateSunLight(az, elev);
+    this._updateSky(az, elev);
+    this._updateSunTestUi();
   }
 
   _updateBar() {
@@ -1001,15 +1500,18 @@ class ShadeDashboardCard extends HTMLElement {
   }
 }
 
-customElements.define("shade-dashboard-card", ShadeDashboardCard);
+// Browser-only registration (skipped when imported by the Node solar test).
+if (typeof customElements !== "undefined") {
+  customElements.define("shade-dashboard-card", ShadeDashboardCard);
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "shade-dashboard-card",
-  name: "Shade Dashboard",
-  description: "Spatial PowerView shade control dashboard",
-  preview: false,
-});
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: "shade-dashboard-card",
+    name: "Shade Dashboard",
+    description: "Spatial PowerView shade control dashboard",
+    preview: false,
+  });
 
-// eslint-disable-next-line no-console
-console.info("%c SHADE-DASHBOARD-CARD %c loaded ", "background:#26211B;color:#F5F1EA;border-radius:3px 0 0 3px;padding:2px 4px", "background:#C67B3B;color:#fff;border-radius:0 3px 3px 0;padding:2px 4px");
+  // eslint-disable-next-line no-console
+  console.info("%c SHADE-DASHBOARD-CARD %c loaded ", "background:#26211B;color:#F5F1EA;border-radius:3px 0 0 3px;padding:2px 4px", "background:#C67B3B;color:#fff;border-radius:0 3px 3px 0;padding:2px 4px");
+}
