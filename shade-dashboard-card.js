@@ -785,7 +785,15 @@ class ShadeDashboardCard extends BaseElement {
     root.querySelector("[data-suntest-on]").addEventListener("click", () => setOn(!this._sunTest.on));
     const offBtn = root.querySelector("[data-suntest-off]");
     if (offBtn) offBtn.addEventListener("click", () => setOn(false));
+    this._sunTestWiredAt = Date.now();
     scrub.addEventListener("input", () => {
+      // Chrome form-state restoration fires a trusted input on the slider
+      // right after a reload (even with autocomplete=off) — don't let that
+      // blip silently ENABLE test mode with a stale time.
+      if (!this._sunTest.on && Date.now() - this._sunTestWiredAt < 1500) {
+        this._updateSunTestUi();
+        return;
+      }
       this._sunTest.min = Number(scrub.value);
       this._sunTest.on = true;
       sync();
@@ -902,7 +910,7 @@ class ShadeDashboardCard extends BaseElement {
   * { box-sizing:border-box; }
   button { font-family:inherit; }
   .frame { width:100%; height:100%; min-height:640px; background:#F5F1EA; display:flex; overflow:hidden; }
-  .rail { width:210px; flex-shrink:0; background:#FFFDF9; border-right:1px solid #EAE2D4; padding:20px 18px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
+  .rail { width:210px; flex-shrink:0; background:#F3EDDF; border-right:1px solid #E4DBC9; padding:20px 18px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
   .main { flex:1; position:relative; padding:20px 22px; display:flex; flex-direction:column; gap:14px; min-width:0; }
   input[type=range]{ accent-color:${ACCENT}; }
   .pill { padding:9px 18px; border-radius:999px; border:1px solid #E2DACB; cursor:pointer; font-weight:600; font-size:13px; }
