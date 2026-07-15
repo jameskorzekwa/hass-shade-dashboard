@@ -121,7 +121,7 @@ function fireEvent(node, type, detail) {
 
 // --- static DOM builders (styles mirror the design prototype) ----------------
 const fabric = (slot, hem, glow) =>
-  `<div data-fabric="${slot}" style="position:absolute;top:0;left:${glow ? 3 : 0}px;right:${glow ? 3 : 0}px;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease">` +
+  `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:${hem}px solid ${HEM};transition:height .45s ease">` +
     (glow ? `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` : "") +
   `</div>`;
 const offline = (slot) =>
@@ -323,7 +323,7 @@ const winAngled = (slot, h) => {
       // windows) instead of being clipped away.
       `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
         sunUnder(slot) +
-        `<div data-fabric="${slot}" style="position:absolute;top:0;left:3px;right:3px;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
+        `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
           `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` +
         `</div>` +
       `</div>` +
@@ -669,10 +669,10 @@ class ShadeDashboardCard extends BaseElement {
           const direct = I > 0.02 && I >= ambient;
           const tL = direct ? Math.max(0, 1 - Math.abs(p.x - g.x1) / 5) : 0.5;
           const tR = direct ? Math.max(0, 1 - Math.abs(p.x - g.x2) / 5) : 0.5;
-          const aL = Math.min(1, 1.35 * G * (0.3 + 0.9 * tL));
-          const aR = Math.min(1, 1.35 * G * (0.3 + 0.9 * tR));
+          const aL = Math.min(1, 1.6 * G * (0.35 + 0.9 * tL));
+          const aR = Math.min(1, 1.6 * G * (0.35 + 0.9 * tR));
           const edge = (deg, a) =>
-            `linear-gradient(${deg}deg,rgba(255,242,204,${a.toFixed(3)}) 0,rgba(255,240,198,${(a * 0.55).toFixed(3)}) 3px,rgba(255,240,198,0) 14px)`;
+            `linear-gradient(${deg}deg,rgba(255,244,210,${a.toFixed(3)}) 0,rgba(255,240,198,${(a * 0.65).toFixed(3)}) 5px,rgba(255,236,190,${(a * 0.3).toFixed(3)}) 13px,rgba(255,236,190,0) 26px)`;
           const wash = direct
             ? `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${(cy / Math.max(covered, 0.05)).toFixed(1)}%,` +
               `rgba(255,236,182,${(0.3 * G).toFixed(3)}) 0,` +
