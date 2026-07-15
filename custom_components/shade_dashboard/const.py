@@ -157,11 +157,12 @@ SUN: dict[str, str] = {
     "south_lux": "sensor.south_light_level",
 }
 
-# --- Sun simulation geometry -------------------------------------------------
-# Physics for projecting the sun onto the wall elevations (the Sun tab and the
-# live sun dot over the wall drawings). The card computes solar azimuth and
-# elevation for this location (NOAA algorithm, validated against the sun2
-# sensors), then maps it onto a wall with a viewer-eye projection:
+# --- Sun light geometry -------------------------------------------------------
+# Physics for rendering real sunlight through the drawn windows (each window
+# carries light layers positioned at the sun's true location in that pane's
+# own glass coordinates). The card computes solar azimuth and elevation for
+# this location (NOAA algorithm, validated against the sun2 sensors), then
+# maps it onto a wall with a viewer-eye projection:
 #   x_ft = viewer_x + viewer_d * tan(az - wall_az)
 #   z_ft = eye_h  + viewer_d * tan(el) / cos(az - wall_az)
 # Wall azimuths are the walls' outward normals (true north). The west viewer
@@ -169,13 +170,14 @@ SUN: dict[str, str] = {
 # el 4.5): the sun sat 76% across lower bay 2 (l4), ~15% below its glass top —
 # the seating area is opposite l4, ~18 ft back. Distances are feet; x runs
 # left->right across the window run as seen from inside; z is height above the
-# floor of that wall's storey.
+# floor of that wall's storey (up_west is the same face one storey up).
 SUN_GEO: dict = {
     "lat": 39.582804,
     "lon": -105.249572,
     "walls": {
         "west": {"az": 295.0, "viewer_x": 8.34, "viewer_d": 18.0, "eye_h": 5.4},
         "south": {"az": 201.0, "viewer_x": 9.5, "viewer_d": 14.0, "eye_h": 5.4},
+        "north": {"az": 25.0, "viewer_x": 4.75, "viewer_d": 12.0, "eye_h": 5.4},
         "up_west": {"az": 295.0, "viewer_x": 8.0, "viewer_d": 7.0, "eye_h": 5.4},
     },
 }

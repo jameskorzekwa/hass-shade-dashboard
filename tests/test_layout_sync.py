@@ -137,6 +137,7 @@ def test_sun_geo_physics_sane() -> None:
     assert abs(SUN_GEO["lon"] - -105.249572) < 1e-9
     walls = SUN_GEO["walls"]
     assert walls["west"]["az"] == 295.0 and walls["south"]["az"] == 201.0
-    assert walls["up_west"]["az"] == 295.0
+    assert walls["up_west"]["az"] == 295.0  # same face, one storey up
+    assert walls["north"]["az"] == 25.0  # west + 90
     for wall in walls.values():
         assert 3 <= wall["viewer_d"] <= 40 and 3 <= wall["eye_h"] <= 7

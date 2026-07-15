@@ -74,7 +74,7 @@ const DEFAULT_LAYOUT = {
     west_lux: "sensor.west_light_level",
     south_lux: "sensor.south_light_level",
   },
-  // Physics for the sun simulation (mirror of const.py SUN_GEO). Wall azimuths
+  // Physics for the window sunlight (mirror of const.py SUN_GEO). Wall azimuths
   // are the walls' true-north outward normals; viewer params are the eye point
   // the projection renders from (feet). Strict JSON — test_layout_sync parses it.
   sun_geo: {
@@ -83,6 +83,7 @@ const DEFAULT_LAYOUT = {
     "walls": {
       "west": {"az": 295.0, "viewer_x": 8.34, "viewer_d": 18.0, "eye_h": 5.4},
       "south": {"az": 201.0, "viewer_x": 9.5, "viewer_d": 14.0, "eye_h": 5.4},
+      "north": {"az": 25.0, "viewer_x": 4.75, "viewer_d": 12.0, "eye_h": 5.4},
       "up_west": {"az": 295.0, "viewer_x": 8.0, "viewer_d": 7.0, "eye_h": 5.4}
     }
   },
@@ -125,8 +126,10 @@ const offline = (slot) =>
   `<div data-offline="${slot}" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:${HATCH}"><span style="writing-mode:vertical-rl;font:700 10px ui-monospace,Menlo,monospace;letter-spacing:2px;color:#A2988A">OFFLINE</span></div>`;
 const flash = (slot, clip) =>
   `<div data-flash="${slot}" class="sd-flash-ov" style="${clip ? `clip-path:url(#sd-clip-${slot})` : "border-radius:3px"}"></div>`;
+const sunUnder = (slot) => `<div data-sunlit="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
+const sunOver = (slot) => `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
 const winRect = (slot, glass) =>
-  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 4)}${flash(slot)}${offline(slot)}</div>`;
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4)}${sunOver(slot)}${flash(slot)}${offline(slot)}</div>`;
 const label = (slot) =>
   `<span data-label="${slot}" style="font:700 13px ui-monospace,Menlo,monospace;color:#6E6558;letter-spacing:.3px"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
@@ -223,41 +226,32 @@ export function sunOnWall(wall, az, el) {
   return { x, z, rel: d, behind: false };
 }
 
-// Wall elevations for the Sun tab, in real feet (x: 0 -> run right, z: floor up).
-// West-wall dimensions taken off the calibration photo: 4 bays on a 4.75 ft
-// pitch, lower glass to 8 ft, angled clerestories following the roofline
-// (drops 1.94 ft per bay). South wall mirrors the drawn layout (door bay,
-// chimney bay). Upstairs is schematic: the five west-facing windows.
+// Real glass rectangles per shade, in wall feet (x across the run, z above that
+// storey's floor) — this drives the per-window sunlight. West bays sit on a
+// 4.75 ft pitch: lower glass 0.3-8 ft, angled clerestories following the
+// roofline (z = 18.4 - 0.408x; the angled panes use their bounding box, plenty
+// for a light gradient). South mirrors the drawn layout (door + chimney bays
+// carry no shade). North is the west wall's +90 (az 25). Upstairs is the same
+// west face one storey up, in its own floor-relative z. lrh1/mbr1 have no
+// known orientation and stay unlit.
 const SIM_BAYS = [[0.3, 4.45], [5.05, 9.2], [9.8, 13.95], [14.55, 18.7]];
-const SIM_ROOF = (x) => 18.4 - 0.408 * x; // west roofline: z at wall-x
-const WALL_ELEV = {
-  west: {
-    label: "West wall", az: 295, run: 19, sky: 26, ridge: true,
-    windows: [
-      ...SIM_BAYS.map(([a, b], i) => ({ slot: ["u4", "u5", "u6", "u7"][i], pts: [[a, 9], [a, SIM_ROOF(a)], [b, SIM_ROOF(b)], [b, 9]] })),
-      ...SIM_BAYS.map(([a, b], i) => ({ slot: ["l3", "l4", "l5", "l6"][i], rect: [a, 0.3, b - a, 7.7] })),
-    ],
-  },
-  south: {
-    label: "South wall", az: 201, run: 19, sky: 26,
-    windows: [
-      { slot: "u1", rect: [SIM_BAYS[0][0], 9, 4.15, 9.4] },
-      { slot: "u2", rect: [SIM_BAYS[1][0], 9, 4.15, 9.4] },
-      { slot: "u3", rect: [SIM_BAYS[3][0], 9, 4.15, 9.4] },
-      { slot: "l1", rect: [SIM_BAYS[1][0], 0.3, 4.15, 7.7] },
-      { slot: "l2", rect: [SIM_BAYS[3][0], 0.3, 4.15, 7.7] },
-      { deco: "door", rect: [SIM_BAYS[0][0], 0, 4.15, 6.8] },
-      { deco: "chimney", rect: [SIM_BAYS[2][0], 0, 4.15, 18.5] },
-    ],
-  },
-  up_west: {
-    label: "Upstairs · west-facing", az: 295, run: 16.6, sky: 14, ridge: true,
-    windows: [
-      { slot: "uh1", rect: [0.25, 2, 2.7, 5] }, { slot: "uh2", rect: [3.45, 2, 2.7, 5] }, { slot: "uh3", rect: [6.65, 2, 2.7, 5] },
-      { slot: "ko1", rect: [10.45, 2, 2.7, 5] }, { slot: "ko2", rect: [13.65, 2, 2.7, 5] },
-    ],
-  },
-};
+const SLOT_GLASS = (() => {
+  const roof = (x) => 18.4 - 0.408 * x;
+  const out = {};
+  ["u4", "u5", "u6", "u7"].forEach((s, i) => { const [a, b] = SIM_BAYS[i]; out[s] = { wall: "west", x1: a, x2: b, z1: 9, z2: roof(a) }; });
+  ["l3", "l4", "l5", "l6"].forEach((s, i) => { const [a, b] = SIM_BAYS[i]; out[s] = { wall: "west", x1: a, x2: b, z1: 0.3, z2: 8 }; });
+  out.u1 = { wall: "south", x1: SIM_BAYS[0][0], x2: SIM_BAYS[0][1], z1: 9, z2: 18.4 };
+  out.u2 = { wall: "south", x1: SIM_BAYS[1][0], x2: SIM_BAYS[1][1], z1: 9, z2: 18.4 };
+  out.u3 = { wall: "south", x1: SIM_BAYS[3][0], x2: SIM_BAYS[3][1], z1: 9, z2: 18.4 };
+  out.l1 = { wall: "south", x1: SIM_BAYS[1][0], x2: SIM_BAYS[1][1], z1: 0.3, z2: 8 };
+  out.l2 = { wall: "south", x1: SIM_BAYS[3][0], x2: SIM_BAYS[3][1], z1: 0.3, z2: 8 };
+  out.l7 = { wall: "north", x1: 0.3, x2: 4.45, z1: 0.3, z2: 8 };
+  out.l8 = { wall: "north", x1: 5.05, x2: 9.2, z1: 0.3, z2: 8 };
+  [["uh1", 0.25], ["uh2", 3.45], ["uh3", 6.65], ["ko1", 10.45], ["ko2", 13.65]].forEach(([s, x]) => {
+    out[s] = { wall: "up_west", x1: x, x2: x + 2.7, z1: 2, z2: 7 };
+  });
+  return out;
+})();
 // Fallback WNW ridge height (deg); normally derived live from the sun2 sunset time.
 const RIDGE_EL_FALLBACK = 2.2;
 
@@ -320,7 +314,9 @@ const winAngled = (slot, h) => {
       // closed its hem sits right on top of the bottom frame (like the rectangle
       // windows) instead of being clipped away.
       `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
+        sunUnder(slot) +
         `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease"></div>` +
+        sunOver(slot) +
       `</div>` +
       flash(slot, true) +
     `</div>`
@@ -328,9 +324,6 @@ const winAngled = (slot, h) => {
 };
 const angledCol = (slot, h) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${winAngled(slot, h)}${label(slot)}</div>`;
-// Live sun dot overlaid on a wall drawing (positioned by _updateSunOverlays).
-const sunDot = (key) =>
-  `<div data-sunov="${key}" style="display:none;position:absolute;left:-100px;top:-100px;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;pointer-events:auto;background:radial-gradient(circle,#FFE0AC 0%,#F0A94F 48%,rgba(240,169,79,0) 74%);box-shadow:0 0 16px 5px rgba(232,163,79,.5);z-index:3"></div>`;
 const chip = (group, text) =>
   `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10px;letter-spacing:1.2px;color:#8A8177;font-weight:600">${text}</span>` +
     `<button data-group="${group}" data-dir="up" title="Open" style="width:30px;height:26px;border:1px solid #DFD7C9;background:#FFFDF9;border-radius:7px;cursor:pointer;font-size:10px;color:#4A4237;padding:0">▲</button>` +
@@ -369,12 +362,9 @@ class ShadeDashboardCard extends BaseElement {
     // the cover's opening/closing state and stops exactly when the shade stops.
     this._commanded = {};
     this._movedSince = {};
-    // Sun simulation state: live follows the clock until scrubbed/played.
-    this._simLive = true;
-    this._simPlaying = false;
-    this._simSeason = "today";
-    this._simMin = 720;
-    this._simStaticKey = null;
+    // Hidden sun-test mode (Settings): overrides the sun2 angles with
+    // computed positions for a scrubbable time of day. Off = live sensors.
+    this._sunTest = { on: false, playing: false, season: "today", min: null };
   }
 
   setConfig(config) {
@@ -467,11 +457,9 @@ class ShadeDashboardCard extends BaseElement {
     } catch (_e) { /* CSP may block; system font fallback is fine */ }
     const mobile = this._isMobile();
     this._builtMobile = mobile;
-    // Keep _tab valid for the layout being built (panels differ per layout;
-    // "settings" and "sun" exist in both).
-    if (mobile && this._tab !== "settings" && this._tab !== "sun") this._tab = "home";
+    // Keep _tab valid for the layout being built (panels differ per layout).
+    if (mobile && this._tab !== "settings") this._tab = "home";
     if (!mobile && this._tab === "home") this._tab = "main";
-    this._simStaticKey = null; // template rebuilt -> redraw the sim walls
     this.shadowRoot.innerHTML = mobile ? this._mobileTemplate() : this._template();
     this._built = true;
     this._wire();
@@ -521,7 +509,19 @@ class ShadeDashboardCard extends BaseElement {
     };
     const chip = (id) =>
       `<span style="display:inline-block;font-size:11px;color:#4A4237;background:#F0EADE;border:1px solid #E2DACB;border-radius:7px;padding:2px 8px;margin:2px 4px 0 0">${nameOf(id)}</span>`;
-    return `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
+    const sunTest = this._builtMobile ? "" : `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+      <div style="font-weight:700;font-size:13.5px;color:#26211B">Sun test <span style="font-weight:500;color:#8A8177;font-size:11px">· preview the window light at any time of day</span></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button data-suntest-on style="padding:8px 14px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;cursor:pointer">Off</button>
+        <button data-suntest-play title="Play the day" style="width:34px;height:34px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:13px;cursor:pointer">▶</button>
+        <input data-suntest-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:120px">
+        <span data-suntest-time style="font:600 12px ui-monospace,Menlo,monospace;min-width:64px">off</span>
+        <select data-suntest-season style="padding:7px 9px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
+          <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
+        </select>
+      </div>
+    </div>`;
+    return sunTest + `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
       ORDER.filter((g) => groups[g])
         .map((g) => {
           const members = groups[g] || [];
@@ -533,11 +533,15 @@ class ShadeDashboardCard extends BaseElement {
         .join("");
   }
 
-  // --- Sun simulation (Sun tab) ---------------------------------------------
-  // Real solar geometry projected onto scale elevations of the walls: today's
-  // sun path (+ a Dec 21 ghost for seasonal contrast), the WNW ridge line, and
-  // a scrubbable/playable sun. All angles come from solarPos() for the house
-  // lat/lon; the wall projection is calibrated from the 2026-07-14 19:58 photo.
+  // --- Sunlight through the windows -------------------------------------------
+  // The sun is not a separate view: every window carries two light layers (one
+  // under the shade fabric, one — much dimmer — above it) whose radial gradient
+  // is positioned at the sun's true location in THAT window's own glass
+  // coordinates (real feet -> local %). Because the mapping is per-window, the
+  // effect is identical in every layout, including the phone's wrapped grids.
+  // Brightness falls off with the sun's distance from each pane and fades out
+  // as the sun drops to the WNW ridge. Physics: solarPos + sunOnWall, config
+  // in const.SUN_GEO (calibrated from the 2026-07-14 19:58 photo).
   _geoWalls() {
     return (this._layout.sun_geo && this._layout.sun_geo.walls) || {};
   }
@@ -546,7 +550,9 @@ class ShadeDashboardCard extends BaseElement {
     return [g.lat, g.lon];
   }
   // WNW ridge height: the sun's elevation at the sun2 (terrain-corrected)
-  // sunset instant — i.e. how high the mountains it sets behind are.
+  // sunset instant — i.e. how high the mountains it sets behind are. The same
+  // angular threshold applies on both storeys (the ridge is distant, so one
+  // floor of height changes its apparent elevation by well under 0.1 deg).
   _ridgeEl() {
     const [lat, lon] = this._geoLatLon();
     const ms = this._sunTime((this._layout.sun || {}).setting_entity);
@@ -557,7 +563,7 @@ class ShadeDashboardCard extends BaseElement {
   _simDate(minutes) {
     const now = new Date();
     const MONTH = { jun: [5, 21], sep: [8, 21], dec: [11, 21] };
-    const md = MONTH[this._simSeason];
+    const md = MONTH[(this._sunTest || {}).season];
     const base = md ? new Date(now.getFullYear(), md[0], md[1]) : new Date(now.getFullYear(), now.getMonth(), now.getDate());
     base.setMinutes(minutes);
     return base;
@@ -567,220 +573,127 @@ class ShadeDashboardCard extends BaseElement {
     const hh = ((h + 11) % 12) + 1;
     return `${hh}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
   }
-  _sunSimHtml() {
-    const wallBox = (key) => {
-      const w = WALL_ELEV[key];
-      return `<div style="min-width:0;display:flex;flex-direction:column;gap:4px">
-        <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-weight:700;font-size:13px">${w.label}</span><span style="font-size:11px;color:#8A8177">faces ${w.az}°</span></div>
-        <svg data-sim-svg="${key}" viewBox="-1 0 ${w.run + 2} ${w.sky + 0.8}" style="width:100%;height:auto;display:block;background:#FBF8F2;border:1px solid #E2DACB;border-radius:12px"></svg>
-        <div data-sim-note="${key}" style="font-size:11px;color:#8A8177;text-align:center;min-height:15px"></div>
-      </div>`;
+  // Current sun angles: the sun2 sensors normally; the hidden test mode
+  // (Settings -> Sun test) overrides them with computed positions so the
+  // light can be scrubbed through any day.
+  _sunAzEl() {
+    const t = this._sunTest;
+    if (t && t.on) {
+      const [lat, lon] = this._geoLatLon();
+      if (lat != null) {
+        const d = this._simDate(Math.min(1290, Math.max(270, t.min == null ? 720 : t.min)));
+        const p = solarPos(d.getTime(), lat, lon);
+        return { az: p.az, el: p.el, test: true };
+      }
+    }
+    const cfg = this._layout.sun || {};
+    return {
+      az: this._sunVal(cfg.azimuth_entity, "azimuth"),
+      el: this._sunVal(cfg.elevation_entity, "elevation"),
+      test: false,
     };
-    return `
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button data-sim-play title="Play the day" style="width:38px;height:38px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:15px;cursor:pointer">▶</button>
-        <input data-sim-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:130px">
-        <span data-sim-time style="font:600 13px ui-monospace,Menlo,monospace;min-width:66px;text-align:right"></span>
-        <span data-sim-pos style="font-size:11px;color:#8A8177;min-width:120px"></span>
-        <button data-sim-now style="padding:9px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;cursor:pointer">Now</button>
-        <select data-sim-season style="padding:8px 10px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
-          <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
-        </select>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px;align-items:start">${wallBox("west")}${wallBox("south")}${wallBox("up_west")}</div>
-      <div style="font-size:11px;color:#8A8177">━ sun path (${"selected day"}) · ┄ Dec 21 · ╌ mountain ridge · dots mark whole hours · positions as seen from the seating area</div>`;
   }
-  // Sample a day's sun track projected onto one wall; returns on-canvas segments.
-  _simTrack(wallKey, dayBase) {
-    const [lat, lon] = this._geoLatLon();
-    const geo = this._geoWalls()[wallKey];
-    const elev = WALL_ELEV[wallKey];
-    if (!geo || lat == null) return { segs: [], ticks: [] };
-    const segs = [], ticks = [];
-    let cur = null;
-    for (let min = 270; min <= 1290; min += 6) {
-      const t = new Date(dayBase.getFullYear(), dayBase.getMonth(), dayBase.getDate());
-      t.setMinutes(min);
-      const { az, el } = solarPos(t.getTime(), lat, lon);
-      const p = el > -1 ? sunOnWall(geo, az, el) : { behind: true };
-      const ok = !p.behind && Math.abs(p.rel) < 75 && p.x > -1 && p.x < elev.run + 1 && p.z > -0.4 && p.z < elev.sky - 0.5;
-      if (ok) {
-        (cur || segs[segs.push(cur = []) - 1]).push([p.x, p.z]);
-        if (min % 60 === 0) ticks.push({ x: p.x, z: p.z, h: min / 60 });
-      } else cur = null;
-    }
-    return { segs, ticks };
-  }
-  _drawSimWall(key, dayBase, ridge) {
-    const w = WALL_ELEV[key];
-    const Y = (z) => w.sky - z; // feet -> svg y (z up, y down)
-    const seg2path = (s) => "M" + s.map(([x, z]) => `${x.toFixed(2)},${Y(z).toFixed(2)}`).join("L");
-    let out = `<line x1="-1" y1="${Y(0)}" x2="${w.run + 1}" y2="${Y(0)}" stroke="#CDC3B2" stroke-width=".1"/>`;
-    for (const win of w.windows) {
-      if (win.deco === "chimney") { out += `<rect x="${win.rect[0]}" y="${Y(win.rect[1] + win.rect[3])}" width="${win.rect[2]}" height="${win.rect[3]}" fill="#D3CCBE"/>`; continue; }
-      if (win.deco === "door") { out += `<rect x="${win.rect[0]}" y="${Y(win.rect[1] + win.rect[3])}" width="${win.rect[2]}" height="${win.rect[3]}" fill="#4A423A" opacity=".6" rx=".1"/>`; continue; }
-      const shape = win.rect
-        ? `<rect x="${win.rect[0]}" y="${Y(win.rect[1] + win.rect[3])}" width="${win.rect[2]}" height="${win.rect[3]}" fill="#DCE3E4" stroke="#1F1B17" stroke-width=".18"/>`
-        : `<polygon points="${win.pts.map(([x, z]) => `${x},${Y(z).toFixed(2)}`).join(" ")}" fill="#D3DCE0" stroke="#1F1B17" stroke-width=".18"/>`;
-      out += shape;
-      if (win.slot && win.rect && win.rect[1] < 8.5) out += `<text x="${win.rect[0] + win.rect[2] / 2}" y="${Y(-0.75)}" text-anchor="middle" font-size=".78" fill="#8A8177" font-family="ui-monospace,Menlo,monospace">${win.slot}</text>`;
-    }
-    const geo = this._geoWalls()[key];
-    if (w.ridge && geo) {
-      const zr = geo.eye_h + geo.viewer_d * Math.tan((ridge * Math.PI) / 180);
-      out += `<line x1="-1" y1="${Y(zr).toFixed(2)}" x2="${w.run + 1}" y2="${Y(zr).toFixed(2)}" stroke="#9C9484" stroke-width=".09" stroke-dasharray=".6 .45"/><text x="${w.run + 0.9}" y="${Y(zr + 0.35).toFixed(2)}" text-anchor="end" font-size=".7" fill="#9C9484">ridge</text>`;
-    }
-    // Dec 21 ghost (seasonal contrast) under today's path
-    if (this._simSeason !== "dec") {
-      const dec = this._simTrack(key, new Date(new Date().getFullYear(), 11, 21));
-      out += dec.segs.map((s) => `<path d="${seg2path(s)}" fill="none" stroke="#8A93B8" stroke-width=".14" stroke-dasharray=".5 .4" opacity=".75"/>`).join("");
-      const first = dec.segs[0] && dec.segs[0][0];
-      if (first) out += `<text x="${first[0] + 0.3}" y="${Y(first[1] + 0.5).toFixed(2)}" font-size=".7" fill="#8A93B8">Dec 21</text>`;
-    }
-    const day = this._simTrack(key, dayBase);
-    out += day.segs.map((s) => `<path d="${seg2path(s)}" fill="none" stroke="#C67B3B" stroke-width=".16" opacity=".85"/>`).join("");
-    for (const t of day.ticks) {
-      const ly = Math.max(0.85, Y(t.z + 0.65)); // keep hour labels inside the canvas
-      out += `<circle cx="${t.x.toFixed(2)}" cy="${Y(t.z).toFixed(2)}" r=".17" fill="#C67B3B"/><text x="${t.x.toFixed(2)}" y="${ly.toFixed(2)}" text-anchor="middle" font-size=".68" fill="#A08B72">${((t.h + 11) % 12) + 1}${t.h < 12 ? "a" : "p"}</text>`;
-    }
-    out += `<g data-sim-dot style="display:none">
-      <circle r="1.05" fill="#F0A94F" opacity=".14"/><circle r=".62" fill="#F0A94F" opacity=".3"/>
-      <circle r=".36" fill="#F3B25C"/><circle r=".22" fill="#E8963C"/>
-    </g>`;
-    return { svg: out, hasToday: day.segs.length > 0 };
-  }
-  _updateSunSim() {
+  _updateSunLight(az, el) {
     const root = this.shadowRoot;
-    if (!root || !root.querySelector("[data-sim-svg]")) return;
-    const [lat, lon] = this._geoLatLon();
-    if (lat == null) return;
-    if (this._simLive) {
-      const n = new Date();
-      this._simMin = n.getHours() * 60 + n.getMinutes();
-    }
-    const min = Math.min(1290, Math.max(270, this._simMin));
-    const dayBase = this._simDate(0);
+    if (!root) return;
+    const walls = this._geoWalls();
     const ridge = this._ridgeEl();
-    const staticKey = `${this._simSeason}|${dayBase.toDateString()}|${ridge.toFixed(2)}`;
-    if (this._simStaticKey !== staticKey) {
-      this._simStaticKey = staticKey;
-      for (const key of Object.keys(WALL_ELEV)) {
-        const svg = root.querySelector(`[data-sim-svg="${key}"]`);
-        if (!svg) continue;
-        const drawn = this._drawSimWall(key, dayBase, ridge);
-        svg.innerHTML = drawn.svg;
-        svg._hasToday = drawn.hasToday;
+    // Below the WNW ridge late in the day (or below the horizon any time):
+    // lights out, with a soft fade over the last ~1.5 deg of descent.
+    const gate = az != null && az > 240 ? ridge - 0.2 : -0.3;
+    const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.5));
+    for (const [slot, g] of Object.entries(SLOT_GLASS)) {
+      const under = root.querySelector(`[data-sunlit="${slot}"]`);
+      const over = root.querySelector(`[data-sunglow="${slot}"]`);
+      if (!under && !over) continue;
+      const host = (under || over).parentElement;
+      const w = host ? host.clientWidth || 0 : 0;
+      let css = "none", cssOver = "none";
+      const wall = walls[g.wall];
+      const p = wall && dayFade > 0 && w ? sunOnWall(wall, az, el) : { behind: true };
+      if (!p.behind) {
+        // Distance from the sun to the nearest point of this pane (0 = on it).
+        const nx = Math.min(g.x2, Math.max(g.x1, p.x));
+        const nz = Math.min(g.z2, Math.max(g.z1, p.z));
+        const dist = Math.hypot(p.x - nx, p.z - nz);
+        const I = Math.max(0, 1 - dist / 7) ** 1.15 * dayFade;
+        if (I > 0.02) {
+          const cx = (((p.x - g.x1) / (g.x2 - g.x1)) * 100).toFixed(1);
+          const cy = (((g.z2 - p.z) / (g.z2 - g.z1)) * 100).toFixed(1);
+          const pxFt = w / (g.x2 - g.x1);
+          const R = 8 * pxFt, core = 1.2 * pxFt;
+          const grad = (a) =>
+            `radial-gradient(circle ${R.toFixed(0)}px at ${cx}% ${cy}%,` +
+            `rgba(255,248,225,${(0.95 * a).toFixed(3)}) 0,` +
+            `rgba(255,228,160,${(0.85 * a).toFixed(3)}) ${core.toFixed(0)}px,` +
+            `rgba(255,200,120,${(0.5 * a).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
+            `rgba(255,185,105,0) ${R.toFixed(0)}px)`;
+          css = grad(I);
+          cssOver = grad(I * 0.32); // the soft glow that bleeds through closed fabric
+        }
       }
-    }
-    const t = this._simDate(min);
-    const { az, el } = solarPos(t.getTime(), lat, lon);
-    const scrub = root.querySelector("[data-sim-scrub]");
-    if (scrub && !this._simScrubbing) scrub.value = String(min);
-    const timeEl = root.querySelector("[data-sim-time]");
-    if (timeEl) timeEl.textContent = this._fmtMin(min);
-    const posEl = root.querySelector("[data-sim-pos]");
-    if (posEl) posEl.textContent = el > -1 ? `az ${az.toFixed(0)}° · el ${el.toFixed(1)}°` : "sun below horizon";
-    const playBtn = root.querySelector("[data-sim-play]");
-    if (playBtn) playBtn.textContent = this._simPlaying ? "⏸" : "▶";
-    for (const key of Object.keys(WALL_ELEV)) {
-      const svg = root.querySelector(`[data-sim-svg="${key}"]`);
-      const note = root.querySelector(`[data-sim-note="${key}"]`);
-      if (!svg) continue;
-      const dot = svg.querySelector("[data-sim-dot]");
-      const w = WALL_ELEV[key];
-      const geo = this._geoWalls()[key];
-      const p = geo && el > -0.9 ? sunOnWall(geo, az, el) : { behind: true };
-      let noteTxt = "";
-      if (el <= -0.9) noteTxt = "Night — sun below the horizon";
-      else if (p.behind) noteTxt = "Sun is behind this wall";
-      else if (w.ridge && el < ridge - 0.25) noteTxt = "Sun set behind the ridge";
-      if (dot) {
-        if (!p.behind && el > -0.9 && !(w.ridge && el < ridge - 0.25) && p.x > -1 && p.x < w.run + 1) {
-          const clamped = p.z > w.sky - 0.7;
-          const z = clamped ? w.sky - 0.7 : Math.max(-0.3, p.z);
-          dot.style.display = "";
-          dot.style.opacity = clamped ? "0.45" : "1";
-          dot.setAttribute("transform", `translate(${p.x.toFixed(2)},${(w.sky - z).toFixed(2)})`);
-          if (clamped) noteTxt = `Sun is above these windows (el ${el.toFixed(0)}°)`;
-        } else dot.style.display = "none";
-      }
-      if (note) note.textContent = noteTxt || (svg._hasToday === false ? "No direct sun on this glass today — see the Dec 21 path" : "");
+      if (under) under.style.background = css;
+      if (over) over.style.background = cssOver;
     }
   }
-  _wireSim() {
+  // Hidden test controls (Settings tab): scrub/play the sun through a day.
+  _wireSunTest() {
     const root = this.shadowRoot;
-    const scrub = root.querySelector("[data-sim-scrub]");
+    const scrub = root.querySelector("[data-suntest-scrub]");
     if (!scrub) return;
-    const seasonSel = root.querySelector("[data-sim-season]");
+    const season = root.querySelector("[data-suntest-season]");
+    const sync = () => { this._updateSunTestUi(); this._update(); };
+    root.querySelector("[data-suntest-on]").addEventListener("click", () => {
+      const t = this._sunTest;
+      t.on = !t.on;
+      t.playing = false;
+      if (t.on && t.min == null) { const n = new Date(); t.min = n.getHours() * 60 + n.getMinutes(); }
+      sync();
+    });
     scrub.addEventListener("input", () => {
-      this._simLive = false;
-      this._simScrubbing = true;
-      this._simMin = Number(scrub.value);
-      this._updateSunSim();
-      this._simScrubbing = false;
+      this._sunTest.min = Number(scrub.value);
+      this._sunTest.on = true;
+      sync();
     });
-    root.querySelector("[data-sim-now]").addEventListener("click", () => {
-      this._simLive = true;
-      this._simPlaying = false;
-      this._simSeason = "today";
-      if (seasonSel) seasonSel.value = "today";
-      this._updateSunSim();
-    });
-    if (seasonSel) seasonSel.addEventListener("change", () => {
-      this._simSeason = seasonSel.value;
-      if (this._simSeason !== "today") this._simLive = false;
-      this._updateSunSim();
-    });
-    root.querySelector("[data-sim-play]").addEventListener("click", () => {
-      this._simPlaying = !this._simPlaying;
-      if (this._simPlaying) {
-        this._simLive = false;
-        if (this._simMin >= 1288) this._simMin = 270; // restart from dawn
+    season.addEventListener("change", () => { this._sunTest.season = season.value; sync(); });
+    root.querySelector("[data-suntest-play]").addEventListener("click", () => {
+      const t = this._sunTest;
+      t.playing = !t.playing;
+      t.on = true;
+      if (t.min == null) t.min = 720;
+      if (t.playing) {
+        if (t.min >= 1288) t.min = 270; // restart from dawn
         const step = () => {
-          if (!this._simPlaying || !this.isConnected) return;
-          this._simMin += 1.6;
-          if (this._simMin >= 1290) { this._simMin = 1290; this._simPlaying = false; }
-          this._updateSunSim();
-          if (this._simPlaying) requestAnimationFrame(step);
+          if (!t.playing || !this.isConnected) return;
+          t.min = Math.min(1290, t.min + 1.6);
+          if (t.min >= 1290) t.playing = false;
+          this._updateSunTestUi();
+          this._updateSun();
+          if (t.playing) requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
       }
-      this._updateSunSim();
+      sync();
     });
+    this._updateSunTestUi();
   }
-  // Live sun dot over the interactive wall drawings (desktop tabs). Maps the
-  // sun2 sensor az/el through the same projection, then anchors feet -> pixels
-  // on two known window edges so it adapts to the drawn layout automatically.
-  _updateSunOverlays(az, el) {
+  _updateSunTestUi() {
     const root = this.shadowRoot;
-    if (!root || !root.querySelector("[data-sunov]")) return;
-    const ridge = this._ridgeEl();
-    const ANCHORS = {
-      west: { wall: "west", left: ["l3", 0.3], right: ["l6", 18.7], top: ["u4", 18.39], bot: ["l3", 0.3] },
-      south: { wall: "south", left: ["u1", 0.3], right: ["u3", 18.7], top: ["u1", 18.4], bot: ["l1", 0.3] },
-      uphall: { wall: "up_west", left: ["uh1", 0.25], right: ["uh3", 9.35], top: ["uh1", 7.0], bot: ["uh1", 2.0] },
-      office: { wall: "up_west", left: ["ko1", 10.45], right: ["ko2", 16.35], top: ["ko1", 7.0], bot: ["ko1", 2.0] },
-    };
-    for (const [key, a] of Object.entries(ANCHORS)) {
-      const ov = root.querySelector(`[data-sunov="${key}"]`);
-      if (!ov) continue;
-      const geo = this._geoWalls()[a.wall];
-      const w = WALL_ELEV[a.wall];
-      const p = geo && az != null && el != null && el > -0.5 ? sunOnWall(geo, az, el) : { behind: true };
-      const blocked = p.behind || (w && w.ridge && el < ridge - 0.25)
-        || p.x < a.left[1] - 1.2 || p.x > a.right[1] + 1.2 || p.z < a.bot[1] - 1.2 || p.z > a.top[1] + 1.6;
-      if (blocked) { ov.style.display = "none"; continue; }
-      const box = ov.parentElement.getBoundingClientRect();
-      const rect = (slot) => { const elx = root.querySelector(`[data-slot="${slot}"]`); return elx && elx.getBoundingClientRect(); };
-      const L = rect(a.left[0]), R = rect(a.right[0]), T = rect(a.top[0]), Bo = rect(a.bot[0]);
-      if (!L || !R || !T || !Bo || !box.width) { ov.style.display = "none"; continue; }
-      const xPx = L.left + ((p.x - a.left[1]) / (a.right[1] - a.left[1])) * (R.right - L.left);
-      const yPx = Bo.bottom - ((p.z - a.bot[1]) / (a.top[1] - a.bot[1])) * (Bo.bottom - T.top);
-      ov.style.display = "block";
-      ov.style.left = `${(((xPx - box.left) / box.width) * 100).toFixed(2)}%`;
-      ov.style.top = `${(((yPx - box.top) / box.height) * 100).toFixed(2)}%`;
-      ov.title = `Sun · az ${az.toFixed(0)}° el ${el.toFixed(1)}°`;
+    const t = this._sunTest;
+    const scrub = root.querySelector("[data-suntest-scrub]");
+    if (!scrub) return;
+    if (t.min != null && !t.scrubbing) scrub.value = String(Math.round(t.min));
+    const lab = root.querySelector("[data-suntest-time]");
+    if (lab) lab.textContent = t.on ? this._fmtMin(Math.min(1290, Math.max(270, t.min == null ? 720 : t.min))) : "off";
+    const tog = root.querySelector("[data-suntest-on]");
+    if (tog) {
+      tog.textContent = t.on ? "On" : "Off";
+      tog.style.background = t.on ? ACCENT : "#FFFDF9";
+      tog.style.color = t.on ? "#FFF" : "#26211B";
+      tog.style.borderColor = t.on ? ACCENT : "#E2DACB";
     }
+    const play = root.querySelector("[data-suntest-play]");
+    if (play) play.textContent = t.playing ? "⏸" : "▶";
   }
 
   _template() {
@@ -790,7 +703,6 @@ class ShadeDashboardCard extends BaseElement {
     const south =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:10px">` +
         `<div style="position:relative;display:flex;align-items:stretch;gap:14px">` +
-          sunDot("south") +
           // col 1: upper 1 over the front door
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">` +
             lowerCol("u1", GLASS_UPPER) +
@@ -811,7 +723,6 @@ class ShadeDashboardCard extends BaseElement {
         // gap sized so the angled uppers' bottoms line up with the south-wall uppers'
         // bottoms (the angled columns now include a label row below each window)
         `<div style="position:relative;display:flex;flex-direction:column;gap:48px;align-items:center">` +
-          sunDot("west") +
           `<div style="display:flex;align-items:flex-end;gap:14px">${angledCol("u4", 190)}${angledCol("u5", 150)}${angledCol("u6", 110)}${angledCol("u7", 70)}</div>` +
           `<div style="display:flex;align-items:flex-end;gap:14px">${lowerCol("l3")}${lowerCol("l4")}${lowerCol("l5")}${lowerCol("l6")}</div>` +
         `</div>` +
@@ -837,13 +748,13 @@ class ShadeDashboardCard extends BaseElement {
     const upHall =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
         `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">UPSTAIRS HALLWAY</span>` +
-        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${sunDot("uphall")}${lowerCol("uh1")}${divider()}${lowerCol("uh2")}${lowerCol("uh3")}</div>` +
+        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${lowerCol("uh1")}${divider()}${lowerCol("uh2")}${lowerCol("uh3")}</div>` +
         chip("upstairs_hallway", "ALL HALLWAY") +
       `</div>`;
     const office =
       `<div style="display:flex;flex-direction:column;align-items:center;gap:14px">` +
         `<span style="font-size:12px;font-weight:700;letter-spacing:1.6px;color:#4A4237">KYLE'S OFFICE</span>` +
-        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${sunDot("office")}${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
+        `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
         chip("office", "ALL OFFICE") +
       `</div>`;
 
@@ -879,7 +790,6 @@ class ShadeDashboardCard extends BaseElement {
     <div style="display:flex;gap:8px;align-items:center">
       <button data-tab="main" class="pill">Main Floor</button>
       <button data-tab="up" class="pill">Upstairs</button>
-      <button data-tab="sun" class="pill">Sun</button>
       <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:17px">⚙</button>
     </div>
 
@@ -903,11 +813,6 @@ class ShadeDashboardCard extends BaseElement {
       <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:48px">
         ${mainBedroom}${divider()}${upHall}${divider()}${office}
       </div>
-    </div>
-
-    <div data-panel="sun" style="flex-direction:column;gap:12px;flex:1;min-height:0;overflow-y:auto">
-      <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Sun</span><span style="font-size:12px;color:#8A8177">Where the sun crosses your windows — real solar geometry for this house</span></div>
-      ${this._sunSimHtml()}
     </div>
 
     <div data-panel="settings" style="flex-direction:column;gap:8px;flex:1;min-height:0">
@@ -970,10 +875,7 @@ class ShadeDashboardCard extends BaseElement {
 <div class="mframe">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;flex-shrink:0">
     <div><div style="font-size:20px;font-weight:700">Shades</div><div data-summary style="font-size:11px;color:#8A8177;margin-top:1px"></div></div>
-    <div style="display:flex;gap:8px">
-      <button data-tab="sun" title="Sun simulation" aria-label="Sun simulation" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">☀</button>
-      <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">⚙</button>
-    </div>
+    <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">⚙</button>
   </div>
 
   <div data-panel="home" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:flex;flex-direction:column;gap:14px">
@@ -982,12 +884,6 @@ class ShadeDashboardCard extends BaseElement {
     ${SECTIONS.map(section).join("")}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:4px">MODES</div>
     ${Object.keys(tg).map((k) => toggleRow(k, tg[k])).join("")}
-  </div>
-
-  <div data-panel="sun" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:none;flex-direction:column;gap:12px">
-    <button data-tab="home" style="align-self:flex-start;padding:9px 16px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:13px;color:#26211B;cursor:pointer">← Back</button>
-    <div style="font-size:18px;font-weight:700">Sun</div>
-    ${this._sunSimHtml()}
   </div>
 
   <div data-panel="settings" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:none;flex-direction:column;gap:10px">
@@ -1023,8 +919,8 @@ class ShadeDashboardCard extends BaseElement {
     root.querySelectorAll("[data-tab]").forEach((el) =>
       el.addEventListener("click", () => { this._tab = el.getAttribute("data-tab"); this._update(); })
     );
-    // sun simulation controls (scrubber/play/now/season)
-    this._wireSim();
+    // hidden sun-test controls (Settings tab, desktop only)
+    this._wireSunTest();
     // group chips + floor buttons
     root.querySelectorAll("[data-group]").forEach((el) =>
       el.addEventListener("click", () => this._group(el.getAttribute("data-group"), el.getAttribute("data-dir")))
@@ -1321,14 +1217,18 @@ class ShadeDashboardCard extends BaseElement {
   _updateSun() {
     const root = this.shadowRoot;
     const cfg = this._layout.sun || {};
-    const elev = this._sunVal(cfg.elevation_entity, "elevation");
-    const az = this._sunVal(cfg.azimuth_entity, "azimuth");
+    const sunAE = this._sunAzEl();
+    const elev = sunAE.el;
+    const az = sunAE.az;
+    // In test mode "now" is the scrubbed instant, so the tracker dot, label
+    // and window light all move together.
+    const nowMs = sunAE.test ? this._simDate(Math.min(1290, Math.max(270, this._sunTest.min == null ? 720 : this._sunTest.min))).getTime() : Date.now();
     const dot = root.querySelector("[data-sun-dot]");
     const timeEl = root.querySelector("[data-sun-time]");
     const labelEl = root.querySelector("[data-sun-label]");
     const riseEl = root.querySelector("[data-sun-rise]");
     const setEl = root.querySelector("[data-sun-set]");
-    if (timeEl) timeEl.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (timeEl) timeEl.textContent = (sunAE.test ? "test · " : "") + new Date(nowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const rise = this._sunTimeStr(cfg.rising_entity);
     const set = this._sunTimeStr(cfg.setting_entity);
     if (riseEl && rise) riseEl.textContent = rise;
@@ -1342,7 +1242,7 @@ class ShadeDashboardCard extends BaseElement {
     const sunsetMs = this._sunTime(cfg.setting_entity);
     let frac = null;
     if (sunriseMs != null && sunsetMs != null && sunsetMs > sunriseMs) {
-      frac = (Date.now() - sunriseMs) / (sunsetMs - sunriseMs);
+      frac = (nowMs - sunriseMs) / (sunsetMs - sunriseMs);
     }
     // Fall back to elevation when sun2 isn't available.
     const night = frac != null ? frac <= 0 || frac >= 1 : elev == null || elev < 0;
@@ -1369,9 +1269,8 @@ class ShadeDashboardCard extends BaseElement {
       else text = "Midday · sun high south";
       labelEl.textContent = text;
     }
-    // Sun tab + the live sun dot over the wall drawings ride the same tick.
-    this._updateSunSim();
-    this._updateSunOverlays(az, elev);
+    // The per-window sunlight rides the same tick.
+    this._updateSunLight(az, elev);
   }
 
   _updateBar() {
