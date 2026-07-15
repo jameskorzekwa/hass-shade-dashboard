@@ -32,6 +32,7 @@ from .const import (
     GATEWAY_HOST,
     GATEWAY_ROOM_SLOT,
     LIVE_EVENT,
+    MOVE_FAILED_EVENT,
     SHADES,
 )
 
@@ -60,6 +61,13 @@ CAL_RECAL_COOLDOWN = 12 * 3600.0  # don't recalibrate the same shade more often
 # While calibrating a shade drives to both hard stops; lock out other commands
 # for this long so nothing interferes with the limit re-teach.
 CALIBRATE_LOCK = 90.0
+# Verified moves: a shade "arrived" if within this many % of target (covers the
+# gateway's end calibration offset — fully open reads ~97-98, closed ~2-3).
+MOVE_TOLERANCE = 8
+# Settle detection while verifying a move.
+MOVE_MIN_WAIT = 6.0  # give shades time to start before judging
+MOVE_SETTLE = 3.0  # unchanged this long -> stopped
+MOVE_TIMEOUT = 65.0  # hard cap per attempt (full travel ~35s + margin)
 
 
 def _list(data, *keys):
@@ -122,14 +130,8 @@ class GatewayTracker:
         """Whether a (source) cover entity is on this gateway."""
         return entity_id in self._entity_to_id
 
-    async def async_move_group(self, source_entities: list[str], primary: float) -> bool:
-        """Move several gateway shades to one position in a single synced call.
-
-        `PUT /home/shades/positions?ids=<all ids>` drives every listed shade
-        together (verified in-sync), so bulk open/close needs no PowerView scene.
-        Shades locked mid-calibration are skipped.
-        """
-        ids = [self._entity_to_id[e] for e in source_entities if e in self._entity_to_id and not self.is_calibrating(e)]
+    async def _put_positions(self, ids: list[int], primary: float) -> bool:
+        """One synced positions call moving every listed gateway shade together."""
         if not ids:
             return False
         primary = max(0.0, min(1.0, primary))
@@ -138,11 +140,117 @@ class GatewayTracker:
         try:
             async with self._session.put(url, json={"positions": {"primary": primary}}, timeout=10) as resp:
                 resp.raise_for_status()
-        except Exception as err:  # noqa: BLE001 - report, don't raise into the service
-            _LOGGER.warning("Group move (ids=%s) failed: %s", id_list, err)
+        except Exception as err:  # noqa: BLE001 - report, don't raise into the caller
+            _LOGGER.warning("Positions move (ids=%s) failed: %s", id_list, err)
             return False
-        _LOGGER.debug("Group move ids=%s -> primary %.2f", id_list, primary)
         return True
+
+    def _movable_ids(self, source_entities: list[str]) -> dict[str, int]:
+        """entity -> gateway id for members that are on the gateway, available,
+        and not locked mid-calibration."""
+        out: dict[str, int] = {}
+        for e in source_entities:
+            gid = self._entity_to_id.get(e)
+            if gid is None or self.is_calibrating(e):
+                continue
+            st = self.hass.states.get(e)
+            if st is not None and st.state == "unavailable":
+                continue
+            out[e] = gid
+        return out
+
+    async def async_move_group(self, source_entities: list[str], primary: float) -> bool:
+        """Fire-and-forget synced move for a group (no verification)."""
+        ids = [g for e, g in self._movable_ids(source_entities).items()]
+        return await self._put_positions(ids, primary)
+
+    async def _read_positions(self, ids) -> dict[int, int]:
+        """Read current 0-100 positions for the given gateway ids."""
+        shades = _list(await self._get("/home/shades"), "shadeData", "shades")
+        idset = set(ids)
+        return {
+            s["id"]: round((s.get("positions") or {}).get("primary", 0) * 100) for s in shades if s.get("id") in idset
+        }
+
+    async def _wait_settled(self, ids: list[int], target: int) -> dict[int, int]:
+        """Poll until every shade is at target or has moved-then-stopped (or timeout)."""
+        start = time.monotonic()
+        last: dict[int, int] = {}
+        stable: dict[int, float] = {}
+        moved: set[int] = set()
+        pos: dict[int, int] = {}
+        while time.monotonic() - start < MOVE_TIMEOUT:
+            await asyncio.sleep(2.0)
+            pos = await self._read_positions(ids)
+            now = time.monotonic()
+            for g in ids:
+                v = pos.get(g)
+                if v is None:
+                    continue
+                if g in last and last[g] != v:
+                    stable[g] = now
+                    moved.add(g)
+                last[g] = v
+            # a shade is "done" if it reached target, or it moved then stopped
+            # (stalled short -> will be flagged); one that never moved keeps us
+            # waiting until MOVE_TIMEOUT, then it's clearly failed.
+            all_done = True
+            for g in ids:
+                v = pos.get(g)
+                at_target = v is not None and abs(v - target) <= MOVE_TOLERANCE
+                stopped = v is not None and g in moved and (now - stable.get(g, now)) >= MOVE_SETTLE
+                if not (at_target or stopped):
+                    all_done = False
+                    break
+            if now - start >= MOVE_MIN_WAIT and all_done:
+                break
+        return pos
+
+    async def async_move_group_verified(
+        self, source_entities: list[str], primary: float, retries: int = 1
+    ) -> list[str]:
+        """Move a group in sync, confirm arrival, retry stragglers, notify on failure.
+
+        This is what PowerView scenes can't do: it checks the shades actually
+        reached the target and re-drives the ones that didn't. Returns the list of
+        entities that still hadn't arrived after the retry (empty = all good).
+        """
+        pending = self._movable_ids(source_entities)  # entity -> gid
+        if not pending:
+            return []
+        target = round(max(0.0, min(1.0, primary)) * 100)
+        for _attempt in range(retries + 1):
+            await self._put_positions(list(pending.values()), primary)
+            final = await self._wait_settled(list(pending.values()), target)
+            pending = {e: g for e, g in pending.items() if abs(final.get(g, -999) - target) > MOVE_TOLERANCE}
+            if not pending:
+                break
+        failed = list(pending)
+        if failed:
+            await self._notify_move_failure(failed, target)
+        return failed
+
+    async def _notify_move_failure(self, entities: list[str], target: int) -> None:
+        """Event + persistent notification for shades that never reached target."""
+        self.hass.bus.async_fire(MOVE_FAILED_EVENT, {"entities": entities, "target": target})
+        names = ", ".join(self._friendly(e) for e in entities)
+        _LOGGER.warning("Shades did not reach %d%% after retry: %s", target, names)
+        with contextlib.suppress(Exception):
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": "Shades didn't respond",
+                    "message": f"After a retry, these shades didn't reach {target}% open: {names}. They may need attention.",
+                    "notification_id": "shade_move_failed",
+                },
+                blocking=False,
+            )
+
+    def _friendly(self, entity_id: str) -> str:
+        st = self.hass.states.get(entity_id)
+        fn = st and st.attributes.get("friendly_name")
+        return fn or entity_id
 
     def is_calibrating(self, entity_id: str) -> bool:
         """Whether a shade is currently locked mid-calibration."""
