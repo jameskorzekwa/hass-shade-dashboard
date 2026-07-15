@@ -958,8 +958,10 @@ class ShadeDashboardCard extends BaseElement {
         <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Upstairs</span><span style="font-size:12px;color:#8A8177">Main bedroom + hallway + office · 6 shades</span></div>
         <div style="display:flex;gap:8px"><button data-group="upstairs" data-dir="up" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Open floor</button><button data-group="upstairs" data-dir="down" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Close floor</button></div>
       </div>
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:48px">
-        ${mainBedroom}${divider()}${upHall}${divider()}${office}
+      <div style="flex:1;display:flex;align-items:center;justify-content:center">
+        <div style="display:flex;align-items:center;gap:16px">
+          ${mainBedroom}${divider()}${upHall}${divider()}${office}
+        </div>
       </div>
     </div>
 
