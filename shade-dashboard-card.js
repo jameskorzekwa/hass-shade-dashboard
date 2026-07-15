@@ -695,13 +695,14 @@ class ShadeDashboardCard extends BaseElement {
     this._setInterior(Math.min(1, 0.6 * diffuseIn + 0.4 * directIn));
   }
   // Tint the room chrome between cozy-bright (no light coming in) and dim
-  // (bright day pouring through open glass). Smoothed so shade moves and
-  // sunset read as a slow drift.
+  // (bright day pouring through open glass). Instantaneous — scrubbing the
+  // sun test from noon to night must snap, and a wide swing so the change
+  // is unmistakable.
   _setInterior(light) {
     const frame = this.shadowRoot && this.shadowRoot.querySelector(".frame");
     if (!frame || this._builtMobile) return;
-    if (!frame.style.transition) frame.style.transition = "background 1.6s ease";
-    frame.style.background = hexMix("#FFFCF3", "#DED4C0", light);
+    frame.style.transition = "none"; // deployed cards may carry an old inline fade
+    frame.style.background = hexMix("#FFFDF6", "#BFB093", Math.min(1, light * 1.3));
   }
   // Sky outside the windows: the glass gradients tint continuously with the
   // sun — deep blue-grey night, warm dawn/dusk horizon color on EVERY pane
