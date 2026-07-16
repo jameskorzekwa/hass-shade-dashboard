@@ -380,7 +380,8 @@ class ShadeDashboardCard extends BaseElement {
     this._pendingTarget = {}; // entity -> {t, ts}: commanded target (untracked bridge)
     // Hidden sun-test mode (Settings): overrides the sun2 angles with
     // computed positions for a scrubbable time of day. Off = live sensors.
-    this._sunTest = { on: false, playing: false, season: "today", min: null };
+    // speed = simulated minutes per real second while playing.
+    this._sunTest = { on: false, playing: false, season: "today", min: null, speed: 96 };
   }
 
   // Heartbeat: hass pushes already re-render on every state change, but this
@@ -944,6 +945,8 @@ class ShadeDashboardCard extends BaseElement {
       sync();
     });
     season.addEventListener("change", () => { this._sunTest.season = season.value; sync(); });
+    const speedSel = root.querySelector("[data-suntest-speed]");
+    if (speedSel) speedSel.addEventListener("change", () => { this._sunTest.speed = Number(speedSel.value) || 96; });
     root.querySelector("[data-suntest-play]").addEventListener("click", () => {
       const t = this._sunTest;
       t.playing = !t.playing;
@@ -951,9 +954,14 @@ class ShadeDashboardCard extends BaseElement {
       if (t.min == null) t.min = 720;
       if (t.playing) {
         if (t.min >= 1288) t.min = 270; // restart from dawn
-        const step = () => {
+        // Time-based stepping (not per-frame), so the chosen speed holds on
+        // any display; dt is capped so a throttled tab can't jump the sun.
+        let last = performance.now();
+        const step = (now) => {
           if (!t.playing || !this.isConnected) return;
-          t.min = Math.min(1290, t.min + 1.6);
+          const dt = Math.min(0.25, (now - last) / 1000);
+          last = now;
+          t.min = Math.min(1290, t.min + (t.speed || 96) * dt);
           if (t.min >= 1290) t.playing = false;
           this._updateSunTestUi();
           this._updateSun();
@@ -984,6 +992,8 @@ class ShadeDashboardCard extends BaseElement {
     }
     const play = root.querySelector("[data-suntest-play]");
     if (play) play.textContent = t.playing ? "⏸" : "▶";
+    const speedSel = root.querySelector("[data-suntest-speed]");
+    if (speedSel) speedSel.value = String(t.speed || 96);
   }
 
   _template() {
@@ -1088,6 +1098,9 @@ class ShadeDashboardCard extends BaseElement {
       <button data-suntest-play title="Play the day" style="width:32px;height:32px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:13px;cursor:pointer">▶</button>
       <input data-suntest-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:120px">
       <span data-suntest-time style="font:600 12px ui-monospace,Menlo,monospace;min-width:64px;text-align:right"></span>
+      <select data-suntest-speed title="Play speed" style="padding:7px 9px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
+        <option value="96">Fast</option><option value="24">Medium</option><option value="6">Slow</option>
+      </select>
       <select data-suntest-season style="padding:7px 9px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
         <option value="today">Today</option><option value="jun">Jun 21</option><option value="sep">Sep 21</option><option value="dec">Dec 21</option>
       </select>
