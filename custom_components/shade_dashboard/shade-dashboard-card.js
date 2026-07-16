@@ -300,7 +300,12 @@ const winAngled = (slot, h) => {
   // glass corners stay sharp (r=0) — a 3px border on a 3px radius leaves a square
   // glass edge, matching the rectangles.
   const outer = roundedPath([[0, 0], [84, 40], [84, h], [0, h]], 3);
-  const inner = roundedPath([[3, 4.75], [81, 41.9], [81, h - 3], [3, h - 3]], 0);
+  // Inner glass inset 2.5px (not 3): the light glass path antialiases INTO the
+  // dark fill on both of its edges, so a geometric 3px ring reads visibly
+  // heavier than the rectangles' 3px CSS border. Top-edge y offsets keep the
+  // sliced border a true uniform thickness (y = 1.584t at x=t, 40+0.631t at
+  // x=84-t for inset t).
+  const inner = roundedPath([[2.5, 3.96], [81.5, 41.58], [81.5, h - 2.5], [2.5, h - 2.5]], 0);
   // Selection ring that follows the trapezoid: an accent outset (5px) with a
   // 2px canvas-colored gap outset, drawn UNDER the frame (like the rectangle's
   // 2px-gap + accent box-shadow). Offsets: left/right/bottom by d; the sliced
@@ -1006,12 +1011,13 @@ class ShadeDashboardCard extends BaseElement {
           // col 1: upper 1 over the front door
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">` +
             lowerCol("u1", GLASS_UPPER) +
-            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div data-doorglass style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border-radius:2px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
+            `<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div title="Front door (no shade)" style="width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:linear-gradient(180deg,#3A342C 0%,#4A423A 60%,#5A5044 100%);opacity:.75;position:relative"><div data-doorglass style="position:absolute;left:10px;right:10px;top:12px;bottom:44%;background:linear-gradient(180deg,#8FA0A8,#B9BDB0);border:3px solid #1F1B17;border-radius:3px"></div></div><span style="font:700 12px ui-monospace,Menlo,monospace;color:#9B9284">DOOR</span></div>` +
           `</div>` +
           // col 2: upper 2 over lower 1
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u2", GLASS_UPPER)}${lowerCol("l1")}</div>` +
-          // chimney
-          `<div style="width:84px;height:448px;align-self:flex-start;border-radius:3px 3px 0 0;background:repeating-linear-gradient(180deg,#D3CCBE 0 8px,#C6BDAD 8px 10px)"></div>` +
+          // chimney: bordered in its own mortar-line color (not the window black),
+          // same subtle 3px rounding top and bottom
+          `<div style="width:84px;height:448px;align-self:flex-start;border:3px solid #C6BDAD;border-radius:3px;background:repeating-linear-gradient(180deg,#D3CCBE 0 8px,#C6BDAD 8px 10px)"></div>` +
           // col 3: upper 3 over lower 2 (the offline one)
           `<div style="display:flex;flex-direction:column;justify-content:space-between;align-items:center;height:470px">${lowerCol("u3", GLASS_UPPER)}${lowerCol("l2")}</div>` +
         `</div>` +
