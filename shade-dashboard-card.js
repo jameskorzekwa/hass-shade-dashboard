@@ -383,6 +383,18 @@ class ShadeDashboardCard extends BaseElement {
     this._sunTest = { on: false, playing: false, season: "today", min: null };
   }
 
+  // Heartbeat: hass pushes already re-render on every state change, but this
+  // guarantees at least 1 Hz — the sun glides instead of jumping between
+  // sensor updates, the tracker clock ticks, and time-based holds (motion
+  // flash, destination pin) expire on schedule even in a quiet house.
+  connectedCallback() {
+    if (!this._ticker) this._ticker = setInterval(() => this._update(), 1000);
+  }
+  disconnectedCallback() {
+    clearInterval(this._ticker);
+    this._ticker = null;
+  }
+
   setConfig(config) {
     if (config && config.layout) this._layout = config.layout;
     this._maybeBuild();
@@ -602,18 +614,23 @@ class ShadeDashboardCard extends BaseElement {
     const hh = ((h + 11) % 12) + 1;
     return `${hh}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
   }
-  // Current sun angles: the sun2 sensors normally; the hidden test mode
-  // (Settings -> Sun test) overrides them with computed positions so the
-  // light can be scrubbed through any day.
+  // Current sun angles. Live mode computes the position for THIS second
+  // (solarPos matches the sun2 sensors to ~0.1 deg — see tests/js), so the
+  // 1 Hz heartbeat glides the sun smoothly instead of stepping it on the
+  // sensors' minute-ish updates; the sensors remain the fallback when geo
+  // config is absent, and sunrise/sunset/ridge always come from sun2. The
+  // hidden test mode (Settings -> Sun test) overrides with a scrubbed time.
   _sunAzEl() {
     const t = this._sunTest;
-    if (t && t.on) {
-      const [lat, lon] = this._geoLatLon();
-      if (lat != null) {
-        const d = this._simDate(Math.min(1290, Math.max(270, t.min == null ? 720 : t.min)));
-        const p = solarPos(d.getTime(), lat, lon);
-        return { az: p.az, el: p.el, test: true };
-      }
+    const [lat, lon] = this._geoLatLon();
+    if (t && t.on && lat != null) {
+      const d = this._simDate(Math.min(1290, Math.max(270, t.min == null ? 720 : t.min)));
+      const p = solarPos(d.getTime(), lat, lon);
+      return { az: p.az, el: p.el, test: true };
+    }
+    if (lat != null) {
+      const p = solarPos(Date.now(), lat, lon);
+      return { az: p.az, el: p.el, test: false };
     }
     const cfg = this._layout.sun || {};
     return {
@@ -622,20 +639,71 @@ class ShadeDashboardCard extends BaseElement {
       test: false,
     };
   }
+  // Stylized sunset clouds, seeded by the DATE so every evening composes a
+  // different sky (per the user: random each night, painterly rather than
+  // photoreal). Each pane gets 2-3 soft streaks — dusty-mauve bodies with
+  // sun-lit peach/rose undersides, the way real sunset clouds light from
+  // below — that drift slowly and ride the same warm envelope as the sky
+  // tint: emerging at golden hour, peaking through the afterglow, and
+  // dissolving into night.
+  _cloudLayers(slot, warmAmt, minutes, date) {
+    if (warmAmt < 0.05) return [];
+    let s = (date.getFullYear() * 366 + date.getMonth() * 31 + date.getDate()) >>> 0;
+    for (let i = 0; i < slot.length; i++) s = (s * 31 + slot.charCodeAt(i)) >>> 0;
+    const rng = () => {
+      s = (s + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const LIT = [[255, 191, 152], [252, 172, 140], [246, 158, 156]];
+    const layers = [];
+    const n = 2 + Math.floor(rng() * 2);
+    for (let i = 0; i < n; i++) {
+      const y = 8 + rng() * 58;
+      const ry = 4 + rng() * 5;
+      const rx = 38 + rng() * 46;
+      const x = ((rng() * 140 + minutes * (0.04 + rng() * 0.08)) % 150) - 15;
+      const a = warmAmt * (0.5 + 0.45 * rng());
+      const lit = LIT[Math.floor(rng() * LIT.length)].join(",");
+      layers.push(
+        `radial-gradient(ellipse ${(rx * 0.85).toFixed(0)}% ${(ry * 0.7).toFixed(1)}% at ${x.toFixed(1)}% ${(y + ry * 0.55).toFixed(1)}%,rgba(${lit},${(0.5 * a).toFixed(3)}) 0,rgba(${lit},0) 100%)`,
+        `radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(1)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,rgba(173,139,161,${(0.38 * a).toFixed(3)}) 0,rgba(173,139,161,${(0.22 * a).toFixed(3)}) 55%,rgba(173,139,161,0) 100%)`
+      );
+    }
+    return layers;
+  }
   _updateSunLight(az, el) {
     const root = this.shadowRoot;
     if (!root) return;
     const walls = this._geoWalls();
     const ridge = this._ridgeEl();
     // Below the WNW ridge late in the day (or below the horizon any time):
-    // lights out, with a soft fade over the last ~1.5 deg of descent.
+    // lights out. Over the last ~5 minutes of descent (the sun drops about
+    // 0.21 deg/min here) the disc doesn't just dim — it also shrinks away
+    // (see `shrink` below), the way the ridge eats the real sun.
     const gate = az != null && az > 240 ? ridge - 0.2 : -0.3;
-    const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.5));
+    const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.05));
+    const shrink = 0.35 + 0.65 * dayFade;
+    // Sunset afterglow: right AFTER the sun drops behind the gate the west
+    // sky is at its most orange — swell the warm glow to a peak, hold it for
+    // ~10 minutes, then fade it out over the following quarter hour. (Runs
+    // in reverse as a dawn glow before sunrise.) Degrees below the gate
+    // stand in for minutes at ~0.21 deg/min.
+    const dBelow = el == null ? 0 : gate - el;
+    const after =
+      dBelow <= 0 ? 0
+      : dBelow < 2.1 ? Math.min(1, dBelow / 0.3)
+      : Math.max(0, 1 - (dBelow - 2.1) / 3);
     // Ambient golden-hour glow: at sunrise/sunset EVERY covered shade leaks a
     // little warm light around its edges (the whole sky is lit), on top of the
     // stronger direct leak on panes the sun is actually near. Same horizon
-    // bell as the sky tint, gated by daylight/ridge like the direct light.
-    const ambient = 0.55 * Math.exp(-Math.pow((el == null ? 90 : el) - 1, 2) / 16) * dayFade;
+    // bell as the sky tint, gated by daylight/ridge like the direct light —
+    // floored by the post-sunset afterglow swell.
+    const ambient = Math.max(
+      0.55 * Math.exp(-Math.pow((el == null ? 90 : el) - 1, 2) / 16) * dayFade,
+      0.7 * after
+    );
     // Diffuse daylight: the sky lights every facade all day, so a fully
     // closed shade still glows through its weave and leaks at the edges
     // even when the sun is nowhere near that pane (fades out after dusk).
@@ -645,19 +713,32 @@ class ShadeDashboardCard extends BaseElement {
     // Light color temperature: amber near the horizon (sunrise/dusk), bright
     // white through the day. One blend per tick, shared by all the layers.
     const warmth = Math.exp(-Math.pow(elv - 1, 2) / 20);
+    // Cloud envelope (same warm curve as the sky tint) + the current —
+    // possibly scrubbed — time, computed once for all panes.
+    const nightAmt = 1 - Math.min(1, Math.max(0, (elv + 9) / 8));
+    const skyWarm = Math.max(Math.exp(-Math.pow(elv - 1, 2) / 16), after) * (1 - nightAmt * 0.85);
+    const st = this._sunTest;
+    const simNow = st && st.on
+      ? this._simDate(Math.min(1290, Math.max(270, st.min == null ? 720 : st.min)))
+      : new Date();
+    const simMin = simNow.getHours() * 60 + simNow.getMinutes() + simNow.getSeconds() / 60;
     const wmix = (w, a) => w.map((c, i) => Math.round(c + (a[i] - c) * warmth)).join(",");
     const LC = {
-      uCore: wmix([255, 253, 248], [255, 238, 196]),
-      uIn: wmix([255, 249, 238], [255, 219, 150]),
       uMid: wmix([255, 243, 228], [255, 199, 124]),
-      uOut: wmix([255, 240, 222], [255, 186, 108]),
-      eCore: wmix([255, 253, 247], [255, 240, 200]),
-      eMid: wmix([255, 251, 243], [255, 233, 186]),
-      eOut: wmix([255, 248, 238], [255, 227, 176]),
+      eCore: wmix([255, 253, 247], [255, 214, 168]),
+      eMid: wmix([255, 251, 243], [255, 190, 140]),
+      eOut: wmix([255, 248, 238], [255, 172, 140]),
       wCore: wmix([255, 251, 243], [255, 235, 185]),
       wMid: wmix([255, 246, 232], [255, 214, 150]),
-      aTop: wmix([255, 252, 245], [255, 238, 200]),
-      aBot: wmix([255, 250, 241], [255, 233, 192]),
+      aTop: wmix([255, 252, 245], [255, 208, 160]),
+      aBot: wmix([255, 250, 241], [255, 190, 150]),
+      dCore: wmix([255, 254, 248], [255, 253, 243]),
+      dBody: wmix([255, 252, 240], [255, 245, 193]),
+      ring1: wmix([255, 232, 178], [255, 184, 74]),
+      ring2: wmix([255, 214, 150], [255, 142, 35]),
+      hCore: wmix([255, 250, 238], [255, 214, 130]),
+      hMid: wmix([255, 244, 224], [255, 192, 101]),
+      hOut: wmix([255, 238, 212], [255, 167, 67]),
     };
     // Admitted-light bookkeeping for the interior-brightness simulation:
     // every pane contributes (glass area) x (how open it is) x (light on it).
@@ -692,14 +773,33 @@ class ShadeDashboardCard extends BaseElement {
         sumOpen += area * admit;
         sumBeam += area * admit * I;
       }
-      const R = 8 * pxFt, core = 1.2 * pxFt;
+      const R = (8 + 2 * warmth) * pxFt * (0.6 + 0.4 * dayFade);
       if (I > 0.02 && w) {
-        css =
+        // The visible sun: a blinding, HARD-EDGED white disc with a crisp
+        // golden rim and a tight saturated corona, layered over the wide
+        // halo. Stark white at midday; near the horizon it swells and the
+        // rim/corona deepen to orange, so sunset through the glass is
+        // unmistakable — but the ball itself stays white-hot, the way a real
+        // low sun still blinds. The gradient sits at the sun's true spot in
+        // this pane, so the disc simply clips away whenever the sun isn't
+        // actually visible here.
+        const disc = Math.max(2, (0.55 + 0.45 * warmth) * pxFt * shrink);
+        const flare = disc * 4.2;
+        const aDisc = Math.min(1, 1.3 * I); // full-blast whenever meaningfully lit
+        const discG =
+          `radial-gradient(circle ${flare.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
+          `rgba(${LC.dCore},${aDisc.toFixed(3)}) 0,` +
+          `rgba(${LC.dBody},${aDisc.toFixed(3)}) ${disc.toFixed(0)}px,` +
+          `rgba(${LC.ring1},${Math.min(1, (0.95 + 0.2 * warmth) * I).toFixed(3)}) ${(disc * 1.3).toFixed(0)}px,` +
+          `rgba(${LC.ring2},${((0.55 + 0.15 * warmth) * I).toFixed(3)}) ${(disc * 2.3).toFixed(0)}px,` +
+          `rgba(${LC.ring2},0) ${flare.toFixed(0)}px)`;
+        const halo =
           `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
-          `rgba(${LC.uCore},${(0.95 * I).toFixed(3)}) 0,` +
-          `rgba(${LC.uIn},${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
-          `rgba(${LC.uMid},${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
-          `rgba(${LC.uOut},0) ${R.toFixed(0)}px)`;
+          `rgba(${LC.hCore},${(0.9 * I).toFixed(3)}) 0,` +
+          `rgba(${LC.hMid},${(0.65 * I).toFixed(3)}) ${(R * 0.36).toFixed(0)}px,` +
+          `rgba(${LC.hOut},${(0.35 * I).toFixed(3)}) ${(R * 0.66).toFixed(0)}px,` +
+          `rgba(${LC.hOut},0) ${R.toFixed(0)}px)`;
+        css = `${discG},${halo}`;
       }
       // Light leaking around the shade: bright slivers down the frame sides
       // (near-sun side hardest), a seep line above the hem, a whisper at the
@@ -727,7 +827,12 @@ class ShadeDashboardCard extends BaseElement {
           cssOver = [edge(0, Math.min(1, 0.95 * G)), edge(90, aL), edge(270, aR), edge(180, 0.45 * G), wash].join(",");
         }
       }
-      if (under) under.style.background = css;
+      if (under) {
+        // Sun (if visible here) over this evening's clouds, over the sky.
+        const parts = this._cloudLayers(slot, skyWarm, simMin, simNow);
+        if (css !== "none") parts.unshift(css);
+        under.style.background = parts.length ? parts.join(",") : "none";
+      }
       if (over) over.style.background = cssOver;
     }
     // Interior brightness (exposure adaptation): the more daylight pours in,
@@ -765,13 +870,25 @@ class ShadeDashboardCard extends BaseElement {
     const elv = el == null ? 30 : el; // sensors missing -> daytime look
     const night = 1 - sm(elv, -9, -1);
     const glow = Math.exp(-Math.pow(elv - 1, 2) / 16); // horizon bell around el ~1
-    const warm = glow * (1 - night * 0.85);
+    // Same post-sunset afterglow envelope as the shade glow: the sky holds
+    // its most vibrant color for ~10 minutes after the sun drops behind the
+    // gate, then lets the night blend carry it out.
+    const gate = az != null && az > 240 ? this._ridgeEl() - 0.2 : -0.3;
+    const dBelow = el == null ? 0 : gate - el;
+    const after =
+      dBelow <= 0 ? 0
+      : dBelow < 2.1 ? Math.min(1, dBelow / 0.3)
+      : Math.max(0, 1 - (dBelow - 2.1) / 3);
+    const warm = Math.max(glow, after) * (1 - night * 0.85);
+    // Sunset gradient: peach-orange on the horizon rising into dusty
+    // rose-lavender, like the reference photos — colorful but pastel, not
+    // neon (the user pulled an earlier, hotter version back).
     let uTop = hexMix("#CBD6DC", "#39445A", night), uBot = hexMix("#E2E2D6", "#4A5468", night);
     let lTop = hexMix("#D8DFE2", "#39445A", night), lMid = hexMix("#E9E6DB", "#4A5468", night);
     let lBot = hexMix("#A8B29B", "#3B443C", night);
-    uTop = hexMix(uTop, "#D9AF9B", warm * 0.35); uBot = hexMix(uBot, "#F2BE7F", warm * 0.85);
-    lTop = hexMix(lTop, "#D9AF9B", warm * 0.45); lMid = hexMix(lMid, "#F2BE7F", warm * 0.9);
-    lBot = hexMix(lBot, "#C9A176", warm * 0.5);
+    uTop = hexMix(uTop, "#C9A0B4", warm * 0.5); uBot = hexMix(uBot, "#F5A56B", warm * 0.8);
+    lTop = hexMix(lTop, "#D9A0A8", warm * 0.5); lMid = hexMix(lMid, "#F5A76F", warm * 0.8);
+    lBot = hexMix(lBot, "#D8996B", warm * 0.5);
     const sky = {
       upper: `linear-gradient(180deg,${uTop} 0%,${uBot} 100%)`,
       lower: `linear-gradient(180deg,${lTop} 0%,${lMid} 55%,${lBot} 100%)`,
@@ -781,7 +898,7 @@ class ShadeDashboardCard extends BaseElement {
     const doorGlass = root.querySelector("[data-doorglass]");
     if (doorGlass) {
       let dTop = hexMix("#8FA0A8", "#2E3748", night), dBot = hexMix("#B9BDB0", "#3B4350", night);
-      dTop = hexMix(dTop, "#D9AF9B", warm * 0.4); dBot = hexMix(dBot, "#F2BE7F", warm * 0.7);
+      dTop = hexMix(dTop, "#C9A0B4", warm * 0.45); dBot = hexMix(dBot, "#F5A76F", warm * 0.65);
       doorGlass.style.background = `linear-gradient(180deg,${dTop},${dBot})`;
     }
     for (const slot of Object.keys(this._layout.shades)) {
@@ -1012,7 +1129,10 @@ class ShadeDashboardCard extends BaseElement {
       <button data-bar-close style="width:26px;height:26px;border-radius:50%;border:none;background:rgba(255,255,255,.12);color:#F5F1EA;cursor:pointer;flex-shrink:0">✕</button>
       <div style="min-width:200px"><div data-bar-name style="font-weight:600;font-size:14px"></div><div data-bar-sub style="font-size:11px;color:#B8AF9F"></div></div>
       <div data-bar-ctl style="display:flex;align-items:center;gap:12px;flex:1">
-        <input data-bar-slider type="range" min="0" max="100" value="0" style="flex:1">
+        <div data-bar-track style="position:relative;flex:1;display:flex;align-items:center">
+          <input data-bar-slider type="range" min="0" max="100" value="0" style="width:100%">
+          <div data-bar-target style="display:none;position:absolute;top:50%;width:15px;height:15px;border-radius:50%;border:2px solid ${ACCENT};background:rgba(198,123,59,.22);transform:translate(-50%,-50%);pointer-events:none"></div>
+        </div>
         <span data-bar-pct style="font:600 13px ui-monospace,Menlo,monospace;min-width:62px;text-align:right"></span>
         <button data-bar-action="close" style="padding:8px 14px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#F5F1EA;cursor:pointer;font-weight:600;font-size:12px">Close</button>
         <button data-bar-action="open" style="padding:8px 14px;border-radius:9px;border:none;background:${ACCENT};color:#FFF;cursor:pointer;font-weight:600;font-size:12px">Open</button>
@@ -1085,7 +1205,10 @@ class ShadeDashboardCard extends BaseElement {
       <span data-bar-pct style="font:600 14px ui-monospace,Menlo,monospace;flex-shrink:0"></span>
     </div>
     <div data-bar-ctl style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">
-      <input data-bar-slider type="range" min="0" max="100" value="0" style="flex:1 1 100%">
+      <div data-bar-track style="position:relative;flex:1 1 100%;display:flex;align-items:center">
+        <input data-bar-slider type="range" min="0" max="100" value="0" style="width:100%">
+        <div data-bar-target style="display:none;position:absolute;top:50%;width:15px;height:15px;border-radius:50%;border:2px solid ${ACCENT};background:rgba(198,123,59,.22);transform:translate(-50%,-50%);pointer-events:none"></div>
+      </div>
       <button data-bar-action="close" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#F5F1EA;font-weight:600;font-size:13px;cursor:pointer">Close</button>
       <button data-bar-action="open" style="flex:1;padding:12px;border-radius:10px;border:none;background:${ACCENT};color:#FFF;font-weight:600;font-size:13px;cursor:pointer">Open</button>
       <button data-bar-recal title="Re-teach this shade's travel limits" style="display:none;flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#B8AF9F;font-weight:600;font-size:13px;cursor:pointer">Recalibrate</button>
@@ -1257,6 +1380,10 @@ class ShadeDashboardCard extends BaseElement {
       const st = this._stateObj(slot);
       const unavailable = !st || st.state === "unavailable";
       const moving = !unavailable && this._isMoving(slot);
+      // A finished journey retires its commanded target (arrived, stopped
+      // early, or the command never took), so the slider's destination pin
+      // can't resurface during a later automation-driven move.
+      if (!moving) delete this._pendingTarget[this._entity(slot)];
       const win = root.querySelector(`[data-slot="${slot}"]`);
       const off = root.querySelector(`[data-offline="${slot}"]`);
       const fl = root.querySelector(`[data-flash="${slot}"]`);
@@ -1488,6 +1615,22 @@ class ShadeDashboardCard extends BaseElement {
       const closed = 100 - this._dispPos(slot); // slider + readout are closed % (target while moving)
       root.querySelector("[data-bar-slider]").value = String(closed);
       pctEl.textContent = this._posLabel(closed);
+    }
+    // Destination pin: while the shade travels, a ghost ring on the track marks
+    // the commanded target so the thumb (live position) visibly slides into it.
+    // Re-dragging mid-travel moves the ring — you always see where the shade
+    // will ultimately end up, even after changing your mind.
+    const pin = root.querySelector("[data-bar-target]");
+    if (pin) {
+      const pend = this._pendingTarget[this._entity(slot)];
+      if (moving && pend != null) {
+        const closedT = 100 - pend.t;
+        // Track % -> thumb-center px for the native ~16px range thumb.
+        pin.style.left = `calc(${closedT}% + ${(8 - 0.16 * closedT).toFixed(2)}px)`;
+        pin.style.display = "block";
+      } else {
+        pin.style.display = "none";
+      }
     }
     // While calibrating, lock out the shade's own controls (slider + open/close).
     const slider = root.querySelector("[data-bar-slider]");
