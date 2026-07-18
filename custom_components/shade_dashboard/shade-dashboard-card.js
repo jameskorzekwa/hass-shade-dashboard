@@ -867,12 +867,13 @@ class ShadeDashboardCard extends BaseElement {
     };
   }
   // This evening's clouds, seeded by DATE + pane so every night composes a
-  // different sky and every window sees its own patch of it. Built the way the
-  // reference timelapses read: puffy banks of overlapping lobes whose bodies
-  // darken into silhouettes while their sun-facing undersides catch a brilliant
-  // rim of light, a hot spot at the sunward end, thin high cirrus that holds
-  // color longest, and the bright sky glowing behind the big bank. Everything
-  // drifts slowly with the (possibly scrubbed) time of day.
+  // different sky and every window sees its own patch of it. Modeled on the
+  // user's long-exposure reference photo (logosbynick beach sunset #2): the
+  // sky is a DECK of layered horizontal streaks — luminous gold bands packed
+  // tight near the horizon, opening into rose streaks and wide plum-lavender
+  // veils higher up. No puffball blobs: every layer is a long, thin band with
+  // soft feathered ends, and the whole deck drifts slowly with the (possibly
+  // scrubbed) time of day.
   _cloudLayers(slot, palette, minutes, date) {
     if (palette.cloudWarm < 0.05 || palette.cloudAlpha < 0.01) return [];
     let s = (date.getFullYear() * 366 + date.getMonth() * 31 + date.getDate()) >>> 0;
@@ -883,51 +884,46 @@ class ShadeDashboardCard extends BaseElement {
       t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
-    // Altitude blend: clouds low in the pane use the "low" palette (first to
-    // dim), clouds near the top use the "high" one (last to lose the light).
-    const band = (key, alt) => hexMix(palette.cloudHi[key], palette.cloudLo[key], alt);
+    // Altitude blend: alt 0 = top of the pane (high sky), 1 = the horizon.
+    // High streaks lean rose/plum (they hold light longest after sunset); low
+    // streaks lean molten gold, blending toward the horizon glow color.
+    const bodyAt = (alt) => hexMix(palette.cloudHi.body, palette.cloudLo.body, alt);
+    const litAt = (alt) => hexMix(palette.cloudHi.lit, palette.cloudLo.glow, 0.15 + 0.85 * alt);
+    const streak = (x, y, rx, ry, col, a) =>
+      `radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(2)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,${rgba(col, a)} 0,${rgba(col, a * 0.85)} 52%,${rgba(col, a * 0.35)} 80%,${rgba(col, 0)} 100%)`;
     const layers = [];
-    // Thin, high cirrus streaks — first to color, last to fade.
-    const cirrus = 1 + Math.floor(rng() * 2);
-    for (let i = 0; i < cirrus; i++) {
-      const y = 6 + rng() * 20;
-      const rx = 30 + rng() * 26, ry = 0.9 + rng() * 1.2;
-      const x = ((rng() * 140 + minutes * (0.05 + rng() * 0.1)) % 150) - 15;
-      const a = palette.cloudAlpha * (0.38 + 0.24 * rng());
-      const lit = band("lit", 0.05);
-      layers.push(`radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(1)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,${rgba(lit, a)} 0,${rgba(lit, a * 0.7)} 55%,${rgba(lit, 0)} 100%)`);
+    // Wide, soft pastel veils across the upper sky (the lavender-rose wash).
+    const veils = 2 + Math.floor(rng() * 2);
+    for (let i = 0; i < veils; i++) {
+      const y = 6 + rng() * 30;
+      const x = ((rng() * 140 + minutes * (0.02 + rng() * 0.04)) % 150) - 15;
+      const col = hexMix(palette.cloudHi.lit, palette.cloudHi.body, 0.4 + rng() * 0.25);
+      layers.push(streak(x, y, 60 + rng() * 35, 3.5 + rng() * 3.5, col, palette.cloudAlpha * (0.16 + 0.1 * rng())));
     }
-    const n = 2 + Math.floor(rng() * 2); // cloud banks in this pane tonight
-    for (let i = 0; i < n; i++) {
-      const big = i === 0; // one leading bank lower in the sky, smaller ones higher
-      const y = big ? 38 + rng() * 22 : 14 + rng() * 24;
-      const alt = Math.min(1, Math.max(0, y / 70));
-      const body = band("body", alt), lit = band("lit", alt);
-      const w = big ? 36 + rng() * 20 : 16 + rng() * 13;
-      const h = big ? 6 + rng() * 4 : 3.2 + rng() * 2.4;
-      const x = ((rng() * 140 + minutes * (0.04 + rng() * 0.08)) % 150) - 15;
-      const a = palette.cloudAlpha * (0.48 + 0.22 * rng());
-      // Sun-lit underside: a tight brilliant rim hugging the bank's base plus
-      // a hot spot at the sunward end — the contrast that makes sunsets read.
-      layers.push(`radial-gradient(ellipse ${(w * 0.5).toFixed(1)}% ${(h * 0.26).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 0.38).toFixed(1)}%,${rgba(lit, Math.min(1, a * 1.8))} 0,${rgba(lit, Math.min(1, a * 1.8))} 45%,${rgba(lit, a * 0.6)} 70%,${rgba(lit, 0)} 100%)`);
-      if (big) layers.push(`radial-gradient(ellipse ${(w * 0.16).toFixed(1)}% ${(h * 0.24).toFixed(1)}% at ${(x - w * 0.28).toFixed(1)}% ${(y + h * 0.3).toFixed(1)}%,${rgba(lit, Math.min(1, a * 2.2))} 0,${rgba(lit, 0)} 100%)`);
-      // Defined puffy body: overlapping lobes that hold their density to a
-      // crisp edge before falling off, so the bank reads as a CLOUD with a
-      // shape — not a smudge.
-      const puffs = big ? 3 + Math.floor(rng() * 2) : 2;
-      for (let k = 0; k < puffs; k++) {
-        const off = k - (puffs - 1) / 2;
-        const px = x + off * w * 0.3 + (rng() - 0.5) * w * 0.06;
-        const prx = w * (0.3 + rng() * 0.07) * (1 - 0.15 * Math.abs(off));
-        const pry = h * (0.68 + rng() * 0.4);
-        const py = y - pry * (0.28 + 0.3 * rng());
-        layers.push(`radial-gradient(ellipse ${prx.toFixed(1)}% ${pry.toFixed(1)}% at ${px.toFixed(1)}% ${py.toFixed(1)}%,${rgba(body, a)} 0,${rgba(body, a)} 60%,${rgba(body, a * 0.35)} 82%,${rgba(body, 0)} 100%)`);
-      }
-      // The bright sky burning behind the big bank, strongest near the horizon.
-      if (big) {
-        const glow = band("glow", alt);
-        layers.push(`radial-gradient(ellipse ${(w * 1.25).toFixed(1)}% ${(h * 2.1).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 1.4).toFixed(1)}%,${rgba(glow, a * 0.5)} 0,${rgba(glow, 0)} 100%)`);
-      }
+    // The streak deck: many thin bands, packed toward the horizon the way
+    // perspective compresses a real cloud layer. Lit gold bands alternate
+    // with darker plum lulls; everything is wide and shallow.
+    const bands = 9 + Math.floor(rng() * 5);
+    for (let i = 0; i < bands; i++) {
+      const v = Math.pow(rng(), 0.58); // bias the deck toward the horizon
+      const y = 10 + v * 76;
+      const alt = Math.min(1, Math.max(0, (y - 8) / 74));
+      const lit = rng() < 0.3 + 0.5 * alt; // horizon streaks mostly luminous
+      const col = lit ? litAt(alt) : bodyAt(alt);
+      const rx = 36 + rng() * 50;
+      const ry = 0.6 + rng() * (0.9 + 1.6 * alt); // slimmer high, thicker low
+      const x = ((rng() * 140 + minutes * (0.03 + rng() * 0.07)) % 150) - 15;
+      const a = palette.cloudAlpha * (lit ? 0.42 + 0.4 * alt : 0.24 + 0.18 * rng());
+      layers.push(streak(x, y, rx, ry, col, Math.min(1, a)));
+    }
+    // Two or three molten filaments hugging the glow line — the near-white
+    // gold slivers that make the reference photo's horizon burn.
+    const hot = 2 + Math.floor(rng() * 2);
+    for (let i = 0; i < hot; i++) {
+      const y = 66 + rng() * 20;
+      const x = ((rng() * 140 + minutes * (0.03 + rng() * 0.05)) % 150) - 15;
+      const col = hexMix(palette.cloudLo.glow, "#FFF3D8", 0.3 + rng() * 0.35);
+      layers.push(streak(x, y, 30 + rng() * 34, 0.45 + rng() * 0.75, col, Math.min(1, palette.cloudAlpha * (0.8 + 0.35 * rng()))));
     }
     return layers;
   }

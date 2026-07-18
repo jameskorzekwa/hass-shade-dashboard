@@ -141,7 +141,7 @@ test("main-floor groups align with the lower window row", () => {
 test("clouds retain date-and-window seeded painterly geometry", () => {
   assert.match(cardSource, /date\.getFullYear\(\) \* 366/);
   assert.match(cardSource, /slot\.charCodeAt\(i\)/);
-  assert.match(cardSource, /const n = 2 \+ Math\.floor\(rng\(\) \* 2\)/);
+  assert.match(cardSource, /const bands = 9 \+ Math\.floor\(rng\(\) \* 5\)/);
   assert.doesNotMatch(cardSource, /data-clouds=/);
 });
 
@@ -158,9 +158,12 @@ test("sunset palette follows the real sky color progression", () => {
   assert.ok(warmth(late.cloudHi.lit) > warmth(late.cloudLo.lit), "high clouds hold warm light longest");
 });
 
-test("cloud banks render lit rims, silhouette bodies, and back-glow", () => {
-  assert.match(cardSource, /const puffs = big \? 3 \+ Math\.floor\(rng\(\) \* 2\) : 2/);
-  assert.match(cardSource, /band\("glow", alt\)/);
+test("clouds form a horizon-biased streak deck like the reference photo", () => {
+  // Long thin bands with a distribution biased toward the horizon, pastel
+  // veils across the upper sky, and molten filaments hugging the glow line.
+  assert.match(cardSource, /Math\.pow\(rng\(\), 0\.58\)/);
+  assert.match(cardSource, /const veils = 2 \+ Math\.floor\(rng\(\) \* 2\)/);
+  assert.match(cardSource, /const hot = 2 \+ Math\.floor\(rng\(\) \* 2\)/);
   assert.match(cardSource, /<stop offset="\.55"/);
 });
 
