@@ -265,6 +265,9 @@ const lowerCol = (slot, glass = GLASS_LOWER) =>
 // tells _setFabric to animate width instead of height.
 const winDoor = (slot) =>
   `<div data-slot="${slot}" title="${slot}" style="position:relative;width:210px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${GLASS_LOWER};overflow:hidden;cursor:pointer">` +
+    // The sun/cloud layer, same as every other pane — without it the door
+    // glass tinted with the sky but never saw this evening's clouds.
+    sunUnder(slot) +
     `<div style="position:absolute;top:0;bottom:0;left:33.33%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div style="position:absolute;top:0;bottom:0;left:66.66%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:4px solid ${HEM};transition:width .45s ease"></div>` +
@@ -934,9 +937,8 @@ class ShadeDashboardCard extends BaseElement {
     const ridge = this._ridgeEl();
     // Below the WNW ridge late in the day (or below the horizon any time):
     // lights out. Over the last ~5 minutes of descent (the sun drops about
-    // 0.21 deg/min here) the ball is OCCLUDED from below — a hard flat cut
-    // line rises through it (see `cutPx` below), the way a flat ridge line
-    // eats the real sun bottom-to-top.
+    // 0.21 deg/min here) the ball dwindles hard (see `shrink` below) until
+    // it winks out as a pinpoint.
     const gate = az != null && az > 240 ? ridge - 0.2 : -0.3;
     const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.05));
     // Sunset afterglow: right AFTER the sun drops behind the gate the west
@@ -1035,28 +1037,20 @@ class ShadeDashboardCard extends BaseElement {
         // this pane, so the disc simply clips away whenever the sun isn't
         // actually visible here. It paints ABOVE this evening's clouds, so
         // the ball punches through the banks instead of drowning in them.
-        const disc = Math.max(2, (0.55 + 0.45 * warmth) * pxFt);
+        // Through the last degree of descent the ball simply SHRINKS — all
+        // the way down to a bright pinpoint — and then it's gone. No
+        // flattening, no clipping: just a perfectly round sun dwindling away.
+        const shrink = 0.08 + 0.92 * dayFade;
+        const disc = Math.max(1.5, (0.55 + 0.45 * warmth) * pxFt * shrink);
         const flare = disc * 4.2;
-        // Behind a FLAT horizon: the ball is never deformed. The disc layer
-        // is painted into a height-limited no-repeat box whose bottom edge is
-        // a razor-straight cut line. As the sun sinks its last degree the cut
-        // rises — first shaving the corona, then sliding up through the still
-        // perfectly ROUND ball until only its crown shows, exactly like a
-        // sphere disappearing bottom-to-top behind a flat ridge line.
-        const hostH = host ? host.clientHeight || 190 : 190;
-        const cyPx = (cy / 100) * hostH;
-        const sink = 1 - dayFade;
-        const cutPx = Math.max(0, cyPx + flare - sink * (flare + disc));
         const aDisc = Math.min(1, 1.3 * I); // full-blast whenever meaningfully lit
         const discG =
-          `radial-gradient(circle ${flare.toFixed(0)}px at ${cx.toFixed(1)}% ${cyPx.toFixed(0)}px,` +
+          `radial-gradient(circle ${flare.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
           `rgba(${LC.dCore},${aDisc.toFixed(3)}) 0,` +
           `rgba(${LC.dBody},${aDisc.toFixed(3)}) ${disc.toFixed(0)}px,` +
           `rgba(${LC.ring1},${Math.min(1, (0.95 + 0.2 * warmth) * I).toFixed(3)}) ${(disc * 1.3).toFixed(0)}px,` +
           `rgba(${LC.ring2},${((0.55 + 0.15 * warmth) * I).toFixed(3)}) ${(disc * 2.3).toFixed(0)}px,` +
-          `rgba(${LC.ring2},0) ${flare.toFixed(0)}px) 0 0 / 100% ${cutPx.toFixed(0)}px no-repeat`;
-        // The halo is atmospheric glow, not the ball — it stays round and
-        // uncut, pooling above the ridge as the last light.
+          `rgba(${LC.ring2},0) ${flare.toFixed(0)}px)`;
         const halo =
           `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
           `rgba(${LC.hCore},${(0.9 * I).toFixed(3)}) 0,` +

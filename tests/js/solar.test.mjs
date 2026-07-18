@@ -167,13 +167,17 @@ test("clouds form a horizon-biased streak deck like the reference photo", () => 
   assert.match(cardSource, /<stop offset="\.55"/);
 });
 
-test("the setting sun slides behind a flat horizon, staying round", () => {
-  // A hard height-limited layer box cuts the still-circular disc from below
-  // as the sun sinks; the ball is never squashed into an oval.
-  assert.match(cardSource, /const cutPx = Math\.max\(0, cyPx \+ flare - sink \* \(flare \+ disc\)\)/);
-  assert.match(cardSource, /0 0 \/ 100% \$\{cutPx\.toFixed\(0\)\}px no-repeat/);
+test("the setting sun shrinks to a pinpoint, staying round", () => {
+  // The ball dwindles hard through the last degree — down to 8% of its
+  // size — with no squashing and no clipping.
+  assert.match(cardSource, /const shrink = 0\.08 \+ 0\.92 \* dayFade/);
+  assert.match(cardSource, /pxFt \* shrink/);
   assert.match(cardSource, /radial-gradient\(circle \$\{flare\.toFixed\(0\)\}px/);
-  assert.doesNotMatch(cardSource, /squash/);
+  assert.doesNotMatch(cardSource, /squash|cutPx/);
+});
+
+test("the sliding door sees the sky like every other pane", () => {
+  assert.match(cardSource, /const winDoor[\s\S]{0,600}sunUnder\(slot\)/);
 });
 
 test("the stark sun disc punches through the clouds", () => {
@@ -181,7 +185,7 @@ test("the stark sun disc punches through the clouds", () => {
   assert.match(cardSource, /dCore: wmix/);
   assert.match(cardSource, /ring1: wmix/);
   assert.match(cardSource, /const flare = disc \* 4\.2/);
-  assert.match(cardSource, /const sink = 1 - dayFade/);
+  assert.match(cardSource, /const shrink = 0\.08 \+ 0\.92 \* dayFade/);
   // ... painted ABOVE the cloud layers so it can never drown in them.
   assert.match(cardSource, /layers\.unshift\(css\)/);
 });
