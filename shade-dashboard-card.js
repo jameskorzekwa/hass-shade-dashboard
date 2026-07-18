@@ -35,11 +35,20 @@ const VIEW_GROUPS = [...FLOOR_GROUPS.main, ...FLOOR_GROUPS.up];
 
 export function normalizeDevicePreferences(value) {
   const prefs = value && typeof value === "object" ? value : {};
-  const defaultFloor = prefs.defaultFloor === "up" ? "up" : "main";
+  let defaultFloor = prefs.defaultFloor === "up" ? "up" : "main";
   const hiddenGroups = Array.isArray(prefs.hiddenGroups)
     ? [...new Set(prefs.hiddenGroups.filter((group) => VIEW_GROUPS.includes(group)))]
     : [];
+  const floorAvailable = (floor) => FLOOR_GROUPS[floor].some((group) => !hiddenGroups.includes(group));
+  const otherFloor = defaultFloor === "main" ? "up" : "main";
+  if (!floorAvailable(defaultFloor) && floorAvailable(otherFloor)) defaultFloor = otherFloor;
   return { defaultFloor, hiddenGroups };
+}
+
+export function resolveSelectableFloor(prefs, ...preferred) {
+  const normalized = normalizeDevicePreferences(prefs);
+  const available = (floor) => (FLOOR_GROUPS[floor] || []).some((group) => !normalized.hiddenGroups.includes(group));
+  return [...preferred, normalized.defaultFloor, "main", "up"].find((floor) => available(floor)) || null;
 }
 
 export function loadDevicePreferences(storage) {
@@ -449,7 +458,11 @@ class ShadeDashboardCard extends BaseElement {
     this._dragging = false;
     this._lastScene = null;
     this._devicePrefs = loadDevicePreferences(browserStorage("localStorage"));
-    this._tab = loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor;
+    this._tab = resolveSelectableFloor(
+      this._devicePrefs,
+      loadSessionFloor(browserStorage("sessionStorage")),
+      this._devicePrefs.defaultFloor
+    ) || "settings";
     this._settingsReturnTab = this._tab;
     this._layout = DEFAULT_LAYOUT;
     // The unified cover.shade_* entities (see the integration's cover.py) now own
@@ -583,7 +596,11 @@ class ShadeDashboardCard extends BaseElement {
     // Keep _tab valid for the layout being built (panels differ per layout).
     if (mobile && this._tab !== "settings") this._tab = "home";
     if (!mobile && this._tab === "home") {
-      this._tab = loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor;
+      this._tab = resolveSelectableFloor(
+        this._devicePrefs,
+        loadSessionFloor(browserStorage("sessionStorage")),
+        this._devicePrefs.defaultFloor
+      ) || "settings";
     }
     this.shadowRoot.innerHTML = mobile ? this._mobileTemplate() : this._template();
     this._built = true;
@@ -602,17 +619,27 @@ class ShadeDashboardCard extends BaseElement {
       if (this._tab === "settings") {
         target = this._builtMobile
           ? "home"
-          : (this._settingsReturnTab === "main" || this._settingsReturnTab === "up"
-              ? this._settingsReturnTab
-              : loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor);
+          : resolveSelectableFloor(
+              this._devicePrefs,
+              this._settingsReturnTab,
+              loadSessionFloor(browserStorage("sessionStorage")),
+              this._devicePrefs.defaultFloor
+            ) || "settings";
       } else {
         this._settingsReturnTab = this._tab;
       }
     }
-    if (this._builtMobile && target !== "settings") target = "home";
-    if (!this._builtMobile && target === "home") {
-      target = loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor;
+    if (this._builtMobile && target !== "settings") {
+      target = resolveSelectableFloor(this._devicePrefs, this._devicePrefs.defaultFloor) ? "home" : "settings";
     }
+    if (!this._builtMobile && target === "home") {
+      target = resolveSelectableFloor(
+        this._devicePrefs,
+        loadSessionFloor(browserStorage("sessionStorage")),
+        this._devicePrefs.defaultFloor
+      ) || "settings";
+    }
+    if ((target === "main" || target === "up") && !this._floorSelectable(target)) return;
     this._tab = target;
     if (target === "main" || target === "up") {
       this._settingsReturnTab = target;
@@ -622,6 +649,9 @@ class ShadeDashboardCard extends BaseElement {
   }
   _groupVisible(group) {
     return !this._devicePrefs.hiddenGroups.includes(group);
+  }
+  _floorSelectable(floor) {
+    return (FLOOR_GROUPS[floor] || []).some((group) => this._groupVisible(group));
   }
   _saveDevicePrefs() {
     this._devicePrefs = normalizeDevicePreferences(this._devicePrefs);
@@ -666,6 +696,17 @@ class ShadeDashboardCard extends BaseElement {
         .reduce((total, group) => total + ((this._layout.groups || {})[group] || []).length, 0);
       summary.textContent = `${count} visible shade${count === 1 ? "" : "s"}${floor === "main" ? " · scroll →" : ""}`;
     });
+    root.querySelectorAll('[data-tab="main"],[data-tab="up"]').forEach((tab) => {
+      const disabled = !this._floorSelectable(tab.getAttribute("data-tab"));
+      tab.disabled = disabled;
+      tab.style.opacity = disabled ? "0.42" : "1";
+      tab.style.cursor = disabled ? "not-allowed" : "pointer";
+    });
+    const defaultFloor = root.querySelector("[data-pref-default-floor]");
+    if (defaultFloor) {
+      for (const option of defaultFloor.options) option.disabled = !this._floorSelectable(option.value);
+      defaultFloor.value = this._devicePrefs.defaultFloor;
+    }
   }
   // Rebuild the appropriate layout when the width crosses the breakpoint.
   _installResize() {

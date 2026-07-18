@@ -19,7 +19,7 @@ const cardPath = fileURLToPath(
 );
 const src = await readFile(cardPath);
 const cardSource = src.toString();
-const { loadDevicePreferences, loadSessionFloor, normalizeDevicePreferences, skyPalette, solarPos, sunOnWall } = await import(
+const { loadDevicePreferences, loadSessionFloor, normalizeDevicePreferences, resolveSelectableFloor, skyPalette, solarPos, sunOnWall } = await import(
   "data:text/javascript;base64," + src.toString("base64")
 );
 
@@ -119,4 +119,13 @@ test("settings expose device floor and per-group visibility controls", () => {
   assert.match(cardSource, /data-pref-group="\$\{group\}"/);
   assert.deepEqual(normalizeDevicePreferences({ hiddenGroups: groups }).hiddenGroups, groups);
   assert.match(cardSource, /this\._tab === "settings"[\s\S]*this\._settingsReturnTab/);
+});
+
+test("floors with no visible groups are not selectable", () => {
+  const mainHidden = { defaultFloor: "main", hiddenGroups: ["south", "west", "north", "hallway"] };
+  assert.equal(normalizeDevicePreferences(mainHidden).defaultFloor, "up");
+  assert.equal(resolveSelectableFloor(mainHidden, "main"), "up");
+  const allHidden = { hiddenGroups: ["south", "west", "north", "hallway", "main_bedroom", "upstairs_hallway", "office"] };
+  assert.equal(resolveSelectableFloor(allHidden, "main", "up"), null);
+  assert.match(cardSource, /tab\.disabled = disabled/);
 });
