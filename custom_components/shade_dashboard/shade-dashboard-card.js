@@ -479,7 +479,7 @@ class ShadeDashboardCard extends BaseElement {
     // Hidden sun-test mode (Settings): overrides the sun2 angles with
     // computed positions for a scrubbable time of day. Off = live sensors.
     // speed = simulated minutes per real second while playing.
-    this._sunTest = { on: false, playing: false, season: "today", min: null, speed: 96 };
+    this._sunTest = { on: false, playing: false, season: "today", min: null, speed: 96, shadePos: null };
   }
 
   setConfig(config) {
@@ -522,6 +522,7 @@ class ShadeDashboardCard extends BaseElement {
     return st.state === "open" ? 100 : 0; // no position support -> binary
   }
   _dispPos(slot) {
+    if (this._sunTest.on && this._sunTest.shadePos != null) return this._sunTest.shadePos;
     // The RYSE (untracked) shade: bridge the tap -> optimistic-state round
     // trip. The unified cover reports the commanded TARGET while the device
     // travels, but for the first beat after a tap the hass state still holds
@@ -699,8 +700,7 @@ class ShadeDashboardCard extends BaseElement {
     root.querySelectorAll('[data-tab="main"],[data-tab="up"]').forEach((tab) => {
       const disabled = !this._floorSelectable(tab.getAttribute("data-tab"));
       tab.disabled = disabled;
-      tab.style.opacity = disabled ? "0.42" : "1";
-      tab.style.cursor = disabled ? "not-allowed" : "pointer";
+      tab.style.display = disabled ? "none" : "";
     });
     const defaultFloor = root.querySelector("[data-pref-default-floor]");
     if (defaultFloor) {
@@ -1017,6 +1017,7 @@ class ShadeDashboardCard extends BaseElement {
       const t = this._sunTest;
       t.on = on;
       t.playing = false;
+      if (!on) t.shadePos = null;
       if (t.on && t.min == null) { const n = new Date(); t.min = n.getHours() * 60 + n.getMinutes(); }
       sync();
     };
@@ -1039,6 +1040,12 @@ class ShadeDashboardCard extends BaseElement {
     season.addEventListener("change", () => { this._sunTest.season = season.value; sync(); });
     const speedSel = root.querySelector("[data-suntest-speed]");
     if (speedSel) speedSel.addEventListener("change", () => { this._sunTest.speed = Number(speedSel.value) || 96; });
+    root.querySelectorAll("[data-suntest-shades]").forEach((button) =>
+      button.addEventListener("click", () => {
+        this._sunTest.shadePos = button.getAttribute("data-suntest-shades") === "open" ? 100 : 0;
+        sync();
+      })
+    );
     root.querySelector("[data-suntest-play]").addEventListener("click", () => {
       const t = this._sunTest;
       t.playing = !t.playing;
@@ -1086,6 +1093,12 @@ class ShadeDashboardCard extends BaseElement {
     if (play) play.textContent = t.playing ? "⏸" : "▶";
     const speedSel = root.querySelector("[data-suntest-speed]");
     if (speedSel) speedSel.value = String(t.speed || 96);
+    root.querySelectorAll("[data-suntest-shades]").forEach((button) => {
+      const target = button.getAttribute("data-suntest-shades") === "open" ? 100 : 0;
+      const active = t.shadePos === target;
+      button.style.background = active ? ACCENT : "#FFFDF9";
+      button.style.color = active ? "#FFF" : "#26211B";
+    });
   }
 
   _template() {
@@ -1190,8 +1203,8 @@ class ShadeDashboardCard extends BaseElement {
     <div data-suntest-bar style="display:none;align-items:center;gap:10px;padding:9px 12px;border:1px solid #E8C9A4;border-radius:12px;background:#FBF4E8">
       <span style="font-size:12px;font-weight:700;color:#A06B2E">☀ Sun test</span>
       <div style="display:flex;gap:6px">
-        <button data-group="all" data-dir="up" title="Open every shade" style="height:32px;padding:0 10px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:11px;cursor:pointer;white-space:nowrap">Open all</button>
-        <button data-group="all" data-dir="down" title="Close every shade" style="height:32px;padding:0 10px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:11px;cursor:pointer;white-space:nowrap">Close all</button>
+        <button data-suntest-shades="open" title="Simulate every shade open without moving them" style="height:32px;padding:0 10px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:11px;cursor:pointer;white-space:nowrap">Shades open</button>
+        <button data-suntest-shades="closed" title="Simulate every shade closed without moving them" style="height:32px;padding:0 10px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:11px;cursor:pointer;white-space:nowrap">Shades closed</button>
       </div>
       <button data-suntest-play title="Play the day" style="width:32px;height:32px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:13px;cursor:pointer">▶</button>
       <input data-suntest-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:120px">
@@ -1484,8 +1497,9 @@ class ShadeDashboardCard extends BaseElement {
     // per-shade: fabric, label, offline, ring, in-motion flash
     for (const slot of Object.keys(this._layout.shades)) {
       const st = this._stateObj(slot);
-      const unavailable = !st || st.state === "unavailable";
-      const moving = !unavailable && this._isMoving(slot);
+      const simulating = this._sunTest.on && this._sunTest.shadePos != null;
+      const unavailable = !simulating && (!st || st.state === "unavailable");
+      const moving = !simulating && !unavailable && this._isMoving(slot);
       const win = root.querySelector(`[data-slot="${slot}"]`);
       const off = root.querySelector(`[data-offline="${slot}"]`);
       const fl = root.querySelector(`[data-flash="${slot}"]`);

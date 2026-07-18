@@ -79,8 +79,10 @@ test("blue hour overtakes the clear sky before cloud warmth fades", () => {
   assert.ok(lateTwilight.cloudAlpha > 0.2, "orange cloud banks should remain visible against deep twilight");
 });
 
-test("sun test exposes synchronized whole-house controls", () => {
-  assert.match(cardSource, /data-suntest-bar[\s\S]*data-group="all" data-dir="up"[\s\S]*data-group="all" data-dir="down"/);
+test("sun test shade controls are simulation-only", () => {
+  assert.equal((cardSource.match(/data-suntest-shades=/g) || []).length, 2);
+  assert.match(cardSource, /this\._sunTest\.shadePos = button\.getAttribute/);
+  assert.doesNotMatch(cardSource, /data-group="all" data-dir="(?:up|down)" title="(?:Open|Close) every shade"/);
 });
 
 test("settings buttons use the Home Assistant Material Design icon", () => {
@@ -127,5 +129,5 @@ test("floors with no visible groups are not selectable", () => {
   assert.equal(resolveSelectableFloor(mainHidden, "main"), "up");
   const allHidden = { hiddenGroups: ["south", "west", "north", "hallway", "main_bedroom", "upstairs_hallway", "office"] };
   assert.equal(resolveSelectableFloor(allHidden, "main", "up"), null);
-  assert.match(cardSource, /tab\.disabled = disabled/);
+  assert.match(cardSource, /tab\.style\.display = disabled \? "none" : ""/);
 });
