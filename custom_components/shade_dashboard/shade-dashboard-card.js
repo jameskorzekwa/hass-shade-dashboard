@@ -1037,16 +1037,27 @@ class ShadeDashboardCard extends BaseElement {
         // the ball punches through the banks instead of drowning in them.
         const disc = Math.max(2, (0.55 + 0.45 * warmth) * pxFt * shrink);
         const flare = disc * 4.2;
+        // The ridge swallowing the ball: through the last degree of descent
+        // the disc doesn't just shrink — it flattens into a bottom-pinned
+        // dome, then a glowing sliver, exactly like a sun sliding behind a
+        // mountain line. `squash` is the surviving vertical fraction, and the
+        // center shifts down so the dome's BASE stays put while its crown
+        // sinks — the visual signature of going behind something.
+        const squash = 0.22 + 0.78 * dayFade;
+        const hostH = host ? host.clientHeight || 190 : 190;
+        const cyS = cy + ((disc * (1 - squash)) / hostH) * 100;
         const aDisc = Math.min(1, 1.3 * I); // full-blast whenever meaningfully lit
         const discG =
-          `radial-gradient(circle ${flare.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
+          `radial-gradient(${flare.toFixed(0)}px ${Math.max(1, flare * squash).toFixed(0)}px at ${cx.toFixed(1)}% ${cyS.toFixed(1)}%,` +
           `rgba(${LC.dCore},${aDisc.toFixed(3)}) 0,` +
           `rgba(${LC.dBody},${aDisc.toFixed(3)}) ${disc.toFixed(0)}px,` +
           `rgba(${LC.ring1},${Math.min(1, (0.95 + 0.2 * warmth) * I).toFixed(3)}) ${(disc * 1.3).toFixed(0)}px,` +
           `rgba(${LC.ring2},${((0.55 + 0.15 * warmth) * I).toFixed(3)}) ${(disc * 2.3).toFixed(0)}px,` +
           `rgba(${LC.ring2},0) ${flare.toFixed(0)}px)`;
+        // The halo flattens with it (more gently), pooling along the ridge
+        // line the way the last light smears sideways at true sunset.
         const halo =
-          `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
+          `radial-gradient(${R.toFixed(0)}px ${Math.max(1, R * (0.55 + 0.45 * squash)).toFixed(0)}px at ${cx.toFixed(1)}% ${cyS.toFixed(1)}%,` +
           `rgba(${LC.hCore},${(0.9 * I).toFixed(3)}) 0,` +
           `rgba(${LC.hMid},${(0.65 * I).toFixed(3)}) ${(R * 0.36).toFixed(0)}px,` +
           `rgba(${LC.hOut},${(0.35 * I).toFixed(3)}) ${(R * 0.66).toFixed(0)}px,` +

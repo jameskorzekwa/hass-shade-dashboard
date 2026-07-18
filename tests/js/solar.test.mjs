@@ -167,6 +167,15 @@ test("clouds form a horizon-biased streak deck like the reference photo", () => 
   assert.match(cardSource, /<stop offset="\.55"/);
 });
 
+test("the setting sun flattens behind the ridge", () => {
+  // Bottom-pinned dome squash: vertical fraction collapses with dayFade
+  // while the center shifts down, so the ball visibly slides behind the
+  // ridge instead of shrinking in place.
+  assert.match(cardSource, /const squash = 0\.22 \+ 0\.78 \* dayFade/);
+  assert.match(cardSource, /const cyS = cy \+ \(\(disc \* \(1 - squash\)\) \/ hostH\) \* 100/);
+  assert.match(cardSource, /Math\.max\(1, flare \* squash\)/);
+});
+
 test("the stark sun disc punches through the clouds", () => {
   // Hard-edged white disc + golden rim + corona (the c97fa63 stark sun) ...
   assert.match(cardSource, /dCore: wmix/);
