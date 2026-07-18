@@ -18,7 +18,7 @@ const cardPath = fileURLToPath(
   new URL("../../custom_components/shade_dashboard/shade-dashboard-card.js", import.meta.url)
 );
 const src = await readFile(cardPath);
-const { solarPos, sunOnWall } = await import(
+const { skyPalette, solarPos, sunOnWall } = await import(
   "data:text/javascript;base64," + src.toString("base64")
 );
 
@@ -64,4 +64,16 @@ test("sun behind a wall is flagged", () => {
   const west = { az: 295.0, viewer_x: 8.34, viewer_d: 18.0, eye_h: 5.4 };
   const morning = solarPos(Date.UTC(2026, 6, 14, 14, 0), LAT, LON); // 8:00 MDT, ENE sun
   assert.equal(sunOnWall(west, morning.az, morning.el).behind, true);
+});
+
+test("blue hour overtakes the clear sky before cloud warmth fades", () => {
+  const sunset = skyPalette(0);
+  const earlyTwilight = skyPalette(-2.5);
+  const lateTwilight = skyPalette(-5);
+
+  assert.ok(earlyTwilight.twilight > 0.55, "open sky should turn substantially blue soon after sunset");
+  assert.ok(earlyTwilight.skyWarm < sunset.skyWarm * 0.2, "warm sky wash should fall away quickly");
+  assert.ok(earlyTwilight.cloudWarm > 0.7, "clouds should retain strong orange light during early blue hour");
+  assert.ok(lateTwilight.cloudWarm > lateTwilight.skyWarm * 10, "cloud color should outlast the warm sky");
+  assert.ok(lateTwilight.cloudAlpha > 0.2, "orange cloud banks should remain visible against deep twilight");
 });

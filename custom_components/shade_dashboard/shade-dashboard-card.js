@@ -129,6 +129,7 @@ const offline = (slot) =>
 const flash = (slot, clip) =>
   `<div data-flash="${slot}" class="sd-flash-ov" style="${clip ? `clip-path:url(#sd-clip-${slot})` : "border-radius:3px"}"></div>`;
 const sunUnder = (slot) => `<div data-sunlit="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
+const skyClouds = (slot) => `<div data-clouds="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
 // Linear mix of two #RRGGBB colors (t: 0 -> a, 1 -> b), for the sky tint.
 // Returns #RRGGBB so mixes can be chained (rgb() output broke the 2nd parse).
 const hexMix = (a, b, t) => {
@@ -136,8 +137,42 @@ const hexMix = (a, b, t) => {
   const ch = (sh) => Math.round(((pa >> sh) & 255) + (((pb >> sh) & 255) - ((pa >> sh) & 255)) * t);
   return `#${((1 << 24) + (ch(16) << 16) + (ch(8) << 8) + ch(0)).toString(16).slice(1)}`;
 };
+const rgba = (hex, alpha) => {
+  const p = parseInt(hex.slice(1), 16);
+  return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${alpha.toFixed(3)})`;
+};
+
+// The clear sky and cloud undersides change at different rates after sunset:
+// blue hour takes over the open sky quickly, while high clouds keep catching
+// orange light from below for several more degrees of solar descent.
+export function skyPalette(el) {
+  const sm = (x, a, b) => Math.min(1, Math.max(0, (x - a) / (b - a)));
+  const elv = el == null ? 30 : el;
+  const twilight = Math.pow(1 - sm(elv, -5.2, -0.2), 0.72);
+  const horizonGlow = Math.exp(-Math.pow(elv - 0.8, 2) / 18);
+  const skyWarm = horizonGlow * Math.pow(1 - twilight, 2.2);
+  const cloudWarm = Math.exp(-Math.pow(elv - 0.3, 2) / 30);
+  const cloudAlpha = (0.1 + 0.62 * cloudWarm) * sm(elv, -8, -4.5);
+
+  let uTop = hexMix("#CBD6DC", "#17243E", twilight), uBot = hexMix("#E2E2D6", "#293B59", twilight);
+  let lTop = hexMix("#D8DFE2", "#1B2944", twilight), lMid = hexMix("#E9E6DB", "#30425F", twilight);
+  let lBot = hexMix("#A8B29B", "#24344A", twilight);
+  uTop = hexMix(uTop, "#D9AF9B", skyWarm * 0.28); uBot = hexMix(uBot, "#F2BE7F", skyWarm * 0.72);
+  lTop = hexMix(lTop, "#D9AF9B", skyWarm * 0.32); lMid = hexMix(lMid, "#F2BE7F", skyWarm * 0.76);
+  lBot = hexMix(lBot, "#C9A176", skyWarm * 0.42);
+
+  const cloudRim = hexMix(hexMix("#F3EEE5", "#71809A", twilight), "#FFD080", Math.min(1, cloudWarm * 1.05));
+  const cloudBright = hexMix(hexMix("#DDE2E2", "#53627E", twilight), "#FF9E52", Math.min(1, cloudWarm * 1.12));
+  const cloudShade = hexMix(hexMix("#AEB8BD", "#34435F", twilight), "#D95D38", cloudWarm * 0.88);
+  const clouds = [
+    `radial-gradient(ellipse 82% 12% at 22% 68%,${rgba(cloudRim, cloudAlpha)} 0%,${rgba(cloudBright, cloudAlpha * 0.9)} 42%,${rgba(cloudShade, cloudAlpha * 0.58)} 63%,transparent 78%)`,
+    `radial-gradient(ellipse 74% 10% at 78% 48%,${rgba(cloudBright, cloudAlpha * 0.82)} 0%,${rgba(cloudShade, cloudAlpha * 0.52)} 58%,transparent 76%)`,
+    `radial-gradient(ellipse 52% 7% at 34% 31%,${rgba(cloudRim, cloudAlpha * 0.58)} 0%,${rgba(cloudBright, cloudAlpha * 0.4)} 56%,transparent 78%)`,
+  ].join(",");
+  return { uTop, uBot, lTop, lMid, lBot, twilight, skyWarm, cloudWarm, cloudAlpha, clouds };
+}
 const winRect = (slot, glass) =>
-  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${skyClouds(slot)}${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
 const label = (slot) =>
   `<span data-label="${slot}" style="font:700 13px ui-monospace,Menlo,monospace;color:#6E6558;letter-spacing:.3px"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
@@ -148,6 +183,7 @@ const lowerCol = (slot, glass = GLASS_LOWER) =>
 // tells _setFabric to animate width instead of height.
 const winDoor = (slot) =>
   `<div data-slot="${slot}" title="${slot}" style="position:relative;width:210px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${GLASS_LOWER};overflow:hidden;cursor:pointer">` +
+    skyClouds(slot) +
     `<div style="position:absolute;top:0;bottom:0;left:33.33%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div style="position:absolute;top:0;bottom:0;left:66.66%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:4px solid ${HEM};transition:width .45s ease"></div>` +
@@ -328,6 +364,7 @@ const winAngled = (slot, h) => {
       // closed its hem sits right on top of the bottom frame (like the rectangle
       // windows) instead of being clipped away.
       `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
+        skyClouds(slot) +
         sunUnder(slot) +
         `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
           `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` +
@@ -761,32 +798,23 @@ class ShadeDashboardCard extends BaseElement {
   _updateSky(az, el) {
     const root = this.shadowRoot;
     if (!root || this._builtMobile) return;
-    const sm = (x, a, b) => Math.min(1, Math.max(0, (x - a) / (b - a)));
-    const elv = el == null ? 30 : el; // sensors missing -> daytime look
-    const night = 1 - sm(elv, -9, -1);
-    const glow = Math.exp(-Math.pow(elv - 1, 2) / 16); // horizon bell around el ~1
-    const warm = glow * (1 - night * 0.85);
-    let uTop = hexMix("#CBD6DC", "#39445A", night), uBot = hexMix("#E2E2D6", "#4A5468", night);
-    let lTop = hexMix("#D8DFE2", "#39445A", night), lMid = hexMix("#E9E6DB", "#4A5468", night);
-    let lBot = hexMix("#A8B29B", "#3B443C", night);
-    uTop = hexMix(uTop, "#D9AF9B", warm * 0.35); uBot = hexMix(uBot, "#F2BE7F", warm * 0.85);
-    lTop = hexMix(lTop, "#D9AF9B", warm * 0.45); lMid = hexMix(lMid, "#F2BE7F", warm * 0.9);
-    lBot = hexMix(lBot, "#C9A176", warm * 0.5);
+    const p = skyPalette(el);
     const sky = {
-      upper: `linear-gradient(180deg,${uTop} 0%,${uBot} 100%)`,
-      lower: `linear-gradient(180deg,${lTop} 0%,${lMid} 55%,${lBot} 100%)`,
-      uTop, uBot,
+      upper: `linear-gradient(180deg,${p.uTop} 0%,${p.uBot} 100%)`,
+      lower: `linear-gradient(180deg,${p.lTop} 0%,${p.lMid} 55%,${p.lBot} 100%)`,
+      uTop: p.uTop, uBot: p.uBot,
     };
     // The front door's little window follows the same sky.
     const doorGlass = root.querySelector("[data-doorglass]");
     if (doorGlass) {
-      let dTop = hexMix("#8FA0A8", "#2E3748", night), dBot = hexMix("#B9BDB0", "#3B4350", night);
-      dTop = hexMix(dTop, "#D9AF9B", warm * 0.4); dBot = hexMix(dBot, "#F2BE7F", warm * 0.7);
-      doorGlass.style.background = `linear-gradient(180deg,${dTop},${dBot})`;
+      const dTop = hexMix(p.uTop, "#1C2941", 0.18), dBot = hexMix(p.uBot, "#26364E", 0.15);
+      doorGlass.style.background = `${p.clouds},linear-gradient(180deg,${dTop},${dBot})`;
     }
     for (const slot of Object.keys(this._layout.shades)) {
       const win = root.querySelector(`[data-slot="${slot}"]`);
       if (!win) continue;
+      const clouds = win.querySelector(`[data-clouds="${slot}"]`);
+      if (clouds) clouds.style.background = p.clouds;
       const stops = win.querySelectorAll(`#sd-g-${slot} stop`); // angled clerestories (SVG)
       if (stops.length === 2) {
         stops[0].setAttribute("stop-color", sky.uTop);
