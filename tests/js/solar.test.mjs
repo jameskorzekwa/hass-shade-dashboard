@@ -144,3 +144,22 @@ test("clouds retain date-and-window seeded painterly geometry", () => {
   assert.match(cardSource, /const n = 2 \+ Math\.floor\(rng\(\) \* 2\)/);
   assert.doesNotMatch(cardSource, /data-clouds=/);
 });
+
+test("sunset palette follows the real sky color progression", () => {
+  const rgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const warmth = (h) => rgb(h)[0] - rgb(h)[2]; // red minus blue
+  const lum = (h) => { const [r, g, b] = rgb(h); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const day = skyPalette(10), peak = skyPalette(-1.5), late = skyPalette(-3.5), blue = skyPalette(-5.5);
+  assert.ok(lum(day.hor) > 180, "daytime horizon stays bright and neutral");
+  assert.ok(warmth(peak.hor) > 100, "afterglow horizon should burn orange-red");
+  assert.ok(warmth(peak.zen) < 0, "zenith stays cool while the horizon burns");
+  assert.ok(lum(peak.mid) > lum(peak.zen), "the sky brightens toward the sunset horizon");
+  assert.ok(lum(blue.zen) < 60 && warmth(blue.zen) < -20, "blue hour zenith turns deep blue");
+  assert.ok(warmth(late.cloudHi.lit) > warmth(late.cloudLo.lit), "high clouds hold warm light longest");
+});
+
+test("cloud banks render lit rims, silhouette bodies, and back-glow", () => {
+  assert.match(cardSource, /const puffs = big \? 3 \+ Math\.floor\(rng\(\) \* 2\) : 2/);
+  assert.match(cardSource, /band\("glow", alt\)/);
+  assert.match(cardSource, /<stop offset="\.55"/);
+});

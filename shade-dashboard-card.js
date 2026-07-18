@@ -196,9 +196,40 @@ const rgba = (hex, alpha) => {
   return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${alpha.toFixed(3)})`;
 };
 
+// Elevation-keyframed sky, matched against real sunset timelapses: a golden
+// hour that cools the zenith while the horizon warms, an orange-red burn at
+// and just after sunset, the magenta/mauve afterglow, then blue hour sliding
+// into night. Each key holds the whole scene: four sky stops (zenith ->
+// horizon), a ground tint, and the cloud paint (dark body, sun-lit rim, and
+// the bright sky glowing behind a bank).
+const SKY_KEYS = [
+  [10.0, { zen: "#C3D2DA", high: "#D8DFE2", mid: "#E9E6DB", hor: "#E7E3CE", grd: "#A8B29B", body: "#E9ECEA", lit: "#FFFFFF", glow: "#FFF7E2" }],
+  [4.0, { zen: "#AFC4D2", high: "#CFD3CC", mid: "#F0DCB4", hor: "#F8D094", grd: "#B2A784", body: "#D6CCC0", lit: "#FFEFC2", glow: "#FFE3A4" }],
+  [1.5, { zen: "#98AFC9", high: "#C2BBAF", mid: "#F5C382", hor: "#FFAC55", grd: "#C09468", body: "#AE9A92", lit: "#FFDD9E", glow: "#FFC061" }],
+  [0.0, { zen: "#7E9ABB", high: "#A9989B", mid: "#F0A159", hor: "#FF8130", grd: "#A87A50", body: "#7E6F76", lit: "#FFC271", glow: "#FF9440" }],
+  [-1.8, { zen: "#5D7BA0", high: "#8A7590", mid: "#E07E52", hor: "#F25C28", grd: "#77563F", body: "#554A61", lit: "#FF9166", glow: "#F26438" }],
+  [-3.5, { zen: "#394F76", high: "#575478", mid: "#99586B", hor: "#BC4A47", grd: "#4E3F49", body: "#3A3A55", lit: "#DB7590", glow: "#B44E58" }],
+  [-5.5, { zen: "#1F3357", high: "#2A3D64", mid: "#414668", hor: "#574560", grd: "#2E3549", body: "#29324E", lit: "#6F5A83", glow: "#4E4362" }],
+  [-8.0, { zen: "#0F1A2F", high: "#131F38", mid: "#1A2740", hor: "#202D46", grd: "#192134", body: "#1C2740", lit: "#24304C", glow: "#202C45" }],
+];
+const sampleSky = (elv) => {
+  if (elv >= SKY_KEYS[0][0]) return SKY_KEYS[0][1];
+  const last = SKY_KEYS[SKY_KEYS.length - 1];
+  if (elv <= last[0]) return last[1];
+  let i = 0;
+  while (SKY_KEYS[i + 1][0] > elv) i++;
+  const [ea, ca] = SKY_KEYS[i], [eb, cb] = SKY_KEYS[i + 1];
+  const t = (ea - elv) / (ea - eb);
+  const out = {};
+  for (const k of Object.keys(ca)) out[k] = hexMix(ca[k], cb[k], t);
+  return out;
+};
+
 // The clear sky and cloud undersides change at different rates after sunset:
 // blue hour takes over the open sky quickly, while high clouds keep catching
-// orange light from below for several more degrees of solar descent.
+// orange light from below for several more degrees of solar descent — so the
+// cloud paint samples the keyframes at offset elevations (high clouds see a
+// "higher" sun than low ones).
 export function skyPalette(el) {
   const sm = (x, a, b) => Math.min(1, Math.max(0, (x - a) / (b - a)));
   const elv = el == null ? 30 : el;
@@ -207,18 +238,16 @@ export function skyPalette(el) {
   const skyWarm = horizonGlow * Math.pow(1 - twilight, 2.2);
   const cloudWarm = Math.exp(-Math.pow(elv - 0.3, 2) / 30);
   const cloudAlpha = (0.1 + 0.62 * cloudWarm) * sm(elv, -8, -4.5);
-
-  let uTop = hexMix("#CBD6DC", "#17243E", twilight), uBot = hexMix("#E2E2D6", "#293B59", twilight);
-  let lTop = hexMix("#D8DFE2", "#1B2944", twilight), lMid = hexMix("#E9E6DB", "#30425F", twilight);
-  let lBot = hexMix("#A8B29B", "#24344A", twilight);
-  uTop = hexMix(uTop, "#D9AF9B", skyWarm * 0.28); uBot = hexMix(uBot, "#F2BE7F", skyWarm * 0.72);
-  lTop = hexMix(lTop, "#D9AF9B", skyWarm * 0.32); lMid = hexMix(lMid, "#F2BE7F", skyWarm * 0.76);
-  lBot = hexMix(lBot, "#C9A176", skyWarm * 0.42);
-
-  const cloudRim = hexMix(hexMix("#F3EEE5", "#71809A", twilight), "#FFD080", Math.min(1, cloudWarm * 1.05));
-  const cloudBright = hexMix(hexMix("#DDE2E2", "#53627E", twilight), "#FF9E52", Math.min(1, cloudWarm * 1.12));
-  const cloudShade = hexMix(hexMix("#AEB8BD", "#34435F", twilight), "#D95D38", cloudWarm * 0.88);
-  return { uTop, uBot, lTop, lMid, lBot, twilight, skyWarm, cloudWarm, cloudAlpha, cloudRim, cloudBright, cloudShade };
+  const s = sampleSky(elv);
+  const hi = sampleSky(elv + 1.7), lo = sampleSky(elv - 0.5);
+  return {
+    ...s,
+    upper: `linear-gradient(180deg,${s.zen} 0%,${s.high} 55%,${s.mid} 100%)`,
+    lower: `linear-gradient(180deg,${s.high} 0%,${s.mid} 48%,${s.hor} 82%,${s.grd} 100%)`,
+    twilight, skyWarm, cloudWarm, cloudAlpha,
+    cloudHi: { body: hi.body, lit: hi.lit, glow: hi.glow },
+    cloudLo: { body: lo.body, lit: lo.lit, glow: lo.glow },
+  };
 }
 const winRect = (slot, glass) =>
   `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
@@ -398,7 +427,7 @@ const winAngled = (slot, h) => {
     `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:${h}px;cursor:pointer">` +
       `<svg width="84" height="${h}" viewBox="0 0 84 ${h}" style="position:absolute;inset:0;display:block;overflow:visible">` +
         `<defs>` +
-          `<linearGradient id="sd-g-${slot}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CBD6DC"/><stop offset="1" stop-color="#E2E2D6"/></linearGradient>` +
+          `<linearGradient id="sd-g-${slot}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CBD6DC"/><stop offset=".55" stop-color="#D5DBD9"/><stop offset="1" stop-color="#E2E2D6"/></linearGradient>` +
           `<clipPath id="sd-clip-${slot}" clipPathUnits="userSpaceOnUse"><path d="${inner}"/></clipPath>` +
         `</defs>` +
         `<path data-ring="${slot}" d="${ring(5, 8)}" fill="${ACCENT}" style="display:none"/>` +
@@ -833,9 +862,13 @@ class ShadeDashboardCard extends BaseElement {
       test: false,
     };
   }
-  // Restore the original painterly cloud geometry: each date and pane gets a
-  // stable, different 2-3 streak composition that drifts through the evening.
-  // Only its color envelope comes from the newer blue-hour palette.
+  // This evening's clouds, seeded by DATE + pane so every night composes a
+  // different sky and every window sees its own patch of it. Built the way the
+  // reference timelapses read: puffy banks of overlapping lobes whose bodies
+  // darken into silhouettes while their sun-facing undersides catch a brilliant
+  // rim of light, a hot spot at the sunward end, thin high cirrus that holds
+  // color longest, and the bright sky glowing behind the big bank. Everything
+  // drifts slowly with the (possibly scrubbed) time of day.
   _cloudLayers(slot, palette, minutes, date) {
     if (palette.cloudWarm < 0.05 || palette.cloudAlpha < 0.01) return [];
     let s = (date.getFullYear() * 366 + date.getMonth() * 31 + date.getDate()) >>> 0;
@@ -846,20 +879,50 @@ class ShadeDashboardCard extends BaseElement {
       t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
-    const litColors = [palette.cloudRim, palette.cloudBright, hexMix(palette.cloudBright, palette.cloudRim, 0.45)];
+    // Altitude blend: clouds low in the pane use the "low" palette (first to
+    // dim), clouds near the top use the "high" one (last to lose the light).
+    const band = (key, alt) => hexMix(palette.cloudHi[key], palette.cloudLo[key], alt);
     const layers = [];
-    const n = 2 + Math.floor(rng() * 2);
+    // Thin, high cirrus streaks — first to color, last to fade.
+    const cirrus = 1 + Math.floor(rng() * 2);
+    for (let i = 0; i < cirrus; i++) {
+      const y = 5 + rng() * 22;
+      const rx = 48 + rng() * 40, ry = 1.1 + rng() * 1.7;
+      const x = ((rng() * 140 + minutes * (0.05 + rng() * 0.1)) % 150) - 15;
+      const a = palette.cloudAlpha * (0.4 + 0.3 * rng());
+      const lit = band("lit", 0.05);
+      layers.push(`radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(1)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,${rgba(lit, a)} 0,${rgba(lit, 0)} 100%)`);
+    }
+    const n = 2 + Math.floor(rng() * 2); // cloud banks in this pane tonight
     for (let i = 0; i < n; i++) {
-      const y = 8 + rng() * 58;
-      const ry = 4 + rng() * 5;
-      const rx = 38 + rng() * 46;
+      const big = i === 0; // one dominant bank low in the sky, smaller ones higher
+      const y = big ? 48 + rng() * 26 : 12 + rng() * 32;
+      const alt = Math.min(1, Math.max(0, y / 80));
+      const body = band("body", alt), lit = band("lit", alt);
+      const w = big ? 62 + rng() * 34 : 26 + rng() * 22;
+      const h = big ? 9 + rng() * 7 : 4.5 + rng() * 3.5;
       const x = ((rng() * 140 + minutes * (0.04 + rng() * 0.08)) % 150) - 15;
-      const a = palette.cloudAlpha * (0.68 + 0.32 * rng());
-      const lit = litColors[Math.floor(rng() * litColors.length)];
-      layers.push(
-        `radial-gradient(ellipse ${(rx * 0.85).toFixed(0)}% ${(ry * 0.7).toFixed(1)}% at ${x.toFixed(1)}% ${(y + ry * 0.55).toFixed(1)}%,${rgba(lit, 0.62 * a)} 0,${rgba(lit, 0)} 100%)`,
-        `radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(1)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,${rgba(palette.cloudShade, 0.44 * a)} 0,${rgba(palette.cloudShade, 0.26 * a)} 55%,${rgba(palette.cloudShade, 0)} 100%)`
-      );
+      const a = palette.cloudAlpha * (0.8 + 0.2 * rng());
+      // Sun-lit underside: a brilliant rim along the bank's base plus a hot
+      // spot at the sunward end — the contrast that makes real sunsets read.
+      layers.push(`radial-gradient(ellipse ${(w * 0.56).toFixed(1)}% ${(h * 0.34).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 0.42).toFixed(1)}%,${rgba(lit, Math.min(1, a * 1.5))} 0,${rgba(lit, a * 0.5)} 55%,${rgba(lit, 0)} 100%)`);
+      if (big) layers.push(`radial-gradient(ellipse ${(w * 0.2).toFixed(1)}% ${(h * 0.3).toFixed(1)}% at ${(x - w * 0.3).toFixed(1)}% ${(y + h * 0.34).toFixed(1)}%,${rgba(lit, Math.min(1, a * 1.9))} 0,${rgba(lit, 0)} 100%)`);
+      // Puffy body: overlapping lobes, tallest near the middle, silhouetting
+      // as the palette darkens.
+      const puffs = big ? 3 + Math.floor(rng() * 2) : 2;
+      for (let k = 0; k < puffs; k++) {
+        const off = k - (puffs - 1) / 2;
+        const px = x + off * w * 0.27 + (rng() - 0.5) * w * 0.07;
+        const prx = w * (0.33 + rng() * 0.09) * (1 - 0.16 * Math.abs(off));
+        const pry = h * (0.72 + rng() * 0.5);
+        const py = y - pry * (0.16 + 0.36 * rng());
+        layers.push(`radial-gradient(ellipse ${prx.toFixed(1)}% ${pry.toFixed(1)}% at ${px.toFixed(1)}% ${py.toFixed(1)}%,${rgba(body, a)} 0,${rgba(body, a * 0.82)} 58%,${rgba(body, 0)} 100%)`);
+      }
+      // The bright sky burning behind the big bank, strongest near the horizon.
+      if (big) {
+        const glow = band("glow", alt);
+        layers.push(`radial-gradient(ellipse ${(w * 1.3).toFixed(1)}% ${(h * 2.4).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 1.5).toFixed(1)}%,${rgba(glow, a * 0.55)} 0,${rgba(glow, 0)} 100%)`);
+      }
     }
     return layers;
   }
@@ -1013,26 +1076,22 @@ class ShadeDashboardCard extends BaseElement {
     const root = this.shadowRoot;
     if (!root || this._builtMobile) return;
     const p = skyPalette(el);
-    const sky = {
-      upper: `linear-gradient(180deg,${p.uTop} 0%,${p.uBot} 100%)`,
-      lower: `linear-gradient(180deg,${p.lTop} 0%,${p.lMid} 55%,${p.lBot} 100%)`,
-      uTop: p.uTop, uBot: p.uBot,
-    };
     // The front door's little window follows the same sky.
     const doorGlass = root.querySelector("[data-doorglass]");
     if (doorGlass) {
-      const dTop = hexMix(p.uTop, "#1C2941", 0.18), dBot = hexMix(p.uBot, "#26364E", 0.15);
+      const dTop = hexMix(p.zen, "#1C2941", 0.18), dBot = hexMix(p.mid, "#26364E", 0.15);
       doorGlass.style.background = `linear-gradient(180deg,${dTop},${dBot})`;
     }
     for (const slot of Object.keys(this._layout.shades)) {
       const win = root.querySelector(`[data-slot="${slot}"]`);
       if (!win) continue;
       const stops = win.querySelectorAll(`#sd-g-${slot} stop`); // angled clerestories (SVG)
-      if (stops.length === 2) {
-        stops[0].setAttribute("stop-color", sky.uTop);
-        stops[1].setAttribute("stop-color", sky.uBot);
+      if (stops.length === 3) {
+        stops[0].setAttribute("stop-color", p.zen);
+        stops[1].setAttribute("stop-color", p.high);
+        stops[2].setAttribute("stop-color", p.mid);
       } else {
-        win.style.background = /^u\d/.test(slot) ? sky.upper : sky.lower;
+        win.style.background = /^u\d/.test(slot) ? p.upper : p.lower;
       }
     }
   }
