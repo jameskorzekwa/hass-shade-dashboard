@@ -184,7 +184,6 @@ const offline = (slot) =>
 const flash = (slot, clip) =>
   `<div data-flash="${slot}" class="sd-flash-ov" style="${clip ? `clip-path:url(#sd-clip-${slot})` : "border-radius:3px"}"></div>`;
 const sunUnder = (slot) => `<div data-sunlit="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
-const skyClouds = (slot) => `<div data-clouds="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
 // Linear mix of two #RRGGBB colors (t: 0 -> a, 1 -> b), for the sky tint.
 // Returns #RRGGBB so mixes can be chained (rgb() output broke the 2nd parse).
 const hexMix = (a, b, t) => {
@@ -219,15 +218,10 @@ export function skyPalette(el) {
   const cloudRim = hexMix(hexMix("#F3EEE5", "#71809A", twilight), "#FFD080", Math.min(1, cloudWarm * 1.05));
   const cloudBright = hexMix(hexMix("#DDE2E2", "#53627E", twilight), "#FF9E52", Math.min(1, cloudWarm * 1.12));
   const cloudShade = hexMix(hexMix("#AEB8BD", "#34435F", twilight), "#D95D38", cloudWarm * 0.88);
-  const clouds = [
-    `radial-gradient(ellipse 82% 12% at 22% 68%,${rgba(cloudRim, cloudAlpha)} 0%,${rgba(cloudBright, cloudAlpha * 0.9)} 42%,${rgba(cloudShade, cloudAlpha * 0.58)} 63%,transparent 78%)`,
-    `radial-gradient(ellipse 74% 10% at 78% 48%,${rgba(cloudBright, cloudAlpha * 0.82)} 0%,${rgba(cloudShade, cloudAlpha * 0.52)} 58%,transparent 76%)`,
-    `radial-gradient(ellipse 52% 7% at 34% 31%,${rgba(cloudRim, cloudAlpha * 0.58)} 0%,${rgba(cloudBright, cloudAlpha * 0.4)} 56%,transparent 78%)`,
-  ].join(",");
-  return { uTop, uBot, lTop, lMid, lBot, twilight, skyWarm, cloudWarm, cloudAlpha, clouds };
+  return { uTop, uBot, lTop, lMid, lBot, twilight, skyWarm, cloudWarm, cloudAlpha, cloudRim, cloudBright, cloudShade };
 }
 const winRect = (slot, glass) =>
-  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${skyClouds(slot)}${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
 const label = (slot) =>
   `<span data-label="${slot}" style="font:700 13px ui-monospace,Menlo,monospace;color:#6E6558;letter-spacing:.3px"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
@@ -238,7 +232,6 @@ const lowerCol = (slot, glass = GLASS_LOWER) =>
 // tells _setFabric to animate width instead of height.
 const winDoor = (slot) =>
   `<div data-slot="${slot}" title="${slot}" style="position:relative;width:210px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${GLASS_LOWER};overflow:hidden;cursor:pointer">` +
-    skyClouds(slot) +
     `<div style="position:absolute;top:0;bottom:0;left:33.33%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div style="position:absolute;top:0;bottom:0;left:66.66%;width:2px;background:rgba(31,27,23,.22)"></div>` +
     `<div data-fabric="${slot}" data-axis="x" style="position:absolute;top:0;left:0;bottom:0;width:0;background:${FABRIC};border-right:4px solid ${HEM};transition:width .45s ease"></div>` +
@@ -419,7 +412,6 @@ const winAngled = (slot, h) => {
       // closed its hem sits right on top of the bottom frame (like the rectangle
       // windows) instead of being clipped away.
       `<div style="position:absolute;top:0;left:0;right:0;bottom:3px;clip-path:url(#sd-clip-${slot})">` +
-        skyClouds(slot) +
         sunUnder(slot) +
         `<div data-fabric="${slot}" style="position:absolute;top:0;left:0;right:0;height:0;background:${FABRIC};border-bottom:4px solid ${HEM};transition:height .45s ease">` +
           `<div data-sunglow="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>` +
@@ -841,6 +833,36 @@ class ShadeDashboardCard extends BaseElement {
       test: false,
     };
   }
+  // Restore the original painterly cloud geometry: each date and pane gets a
+  // stable, different 2-3 streak composition that drifts through the evening.
+  // Only its color envelope comes from the newer blue-hour palette.
+  _cloudLayers(slot, palette, minutes, date) {
+    if (palette.cloudWarm < 0.05 || palette.cloudAlpha < 0.01) return [];
+    let s = (date.getFullYear() * 366 + date.getMonth() * 31 + date.getDate()) >>> 0;
+    for (let i = 0; i < slot.length; i++) s = (s * 31 + slot.charCodeAt(i)) >>> 0;
+    const rng = () => {
+      s = (s + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const litColors = [palette.cloudRim, palette.cloudBright, hexMix(palette.cloudBright, palette.cloudRim, 0.45)];
+    const layers = [];
+    const n = 2 + Math.floor(rng() * 2);
+    for (let i = 0; i < n; i++) {
+      const y = 8 + rng() * 58;
+      const ry = 4 + rng() * 5;
+      const rx = 38 + rng() * 46;
+      const x = ((rng() * 140 + minutes * (0.04 + rng() * 0.08)) % 150) - 15;
+      const a = palette.cloudAlpha * (0.68 + 0.32 * rng());
+      const lit = litColors[Math.floor(rng() * litColors.length)];
+      layers.push(
+        `radial-gradient(ellipse ${(rx * 0.85).toFixed(0)}% ${(ry * 0.7).toFixed(1)}% at ${x.toFixed(1)}% ${(y + ry * 0.55).toFixed(1)}%,${rgba(lit, 0.62 * a)} 0,${rgba(lit, 0)} 100%)`,
+        `radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(1)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,${rgba(palette.cloudShade, 0.44 * a)} 0,${rgba(palette.cloudShade, 0.26 * a)} 55%,${rgba(palette.cloudShade, 0)} 100%)`
+      );
+    }
+    return layers;
+  }
   _updateSunLight(az, el) {
     const root = this.shadowRoot;
     if (!root) return;
@@ -861,6 +883,12 @@ class ShadeDashboardCard extends BaseElement {
     const elv = el == null ? 30 : el;
     const daylight = Math.min(1, Math.max(0, (elv + 6) / 14)); // dark below -6, full by ~8 deg
     const dayGlow = 0.34 * daylight;
+    const cloudPalette = skyPalette(elv);
+    const st = this._sunTest;
+    const cloudDate = st && st.on
+      ? this._simDate(Math.min(1290, Math.max(270, st.min == null ? 720 : st.min)))
+      : new Date();
+    const cloudMinutes = cloudDate.getHours() * 60 + cloudDate.getMinutes() + cloudDate.getSeconds() / 60;
     // Light color temperature: amber near the horizon (sunrise/dusk), bright
     // white through the day. One blend per tick, shared by all the layers.
     const warmth = Math.exp(-Math.pow(elv - 1, 2) / 20);
@@ -946,7 +974,11 @@ class ShadeDashboardCard extends BaseElement {
           cssOver = [edge(0, Math.min(1, 0.95 * G)), edge(90, aL), edge(270, aR), edge(180, 0.45 * G), wash].join(",");
         }
       }
-      if (under) under.style.background = css;
+      if (under) {
+        const layers = this._cloudLayers(slot, cloudPalette, cloudMinutes, cloudDate);
+        if (css !== "none") layers.unshift(css);
+        under.style.background = layers.length ? layers.join(",") : "none";
+      }
       if (over) over.style.background = cssOver;
     }
     // Interior brightness (exposure adaptation): the more daylight pours in,
@@ -990,13 +1022,11 @@ class ShadeDashboardCard extends BaseElement {
     const doorGlass = root.querySelector("[data-doorglass]");
     if (doorGlass) {
       const dTop = hexMix(p.uTop, "#1C2941", 0.18), dBot = hexMix(p.uBot, "#26364E", 0.15);
-      doorGlass.style.background = `${p.clouds},linear-gradient(180deg,${dTop},${dBot})`;
+      doorGlass.style.background = `linear-gradient(180deg,${dTop},${dBot})`;
     }
     for (const slot of Object.keys(this._layout.shades)) {
       const win = root.querySelector(`[data-slot="${slot}"]`);
       if (!win) continue;
-      const clouds = win.querySelector(`[data-clouds="${slot}"]`);
-      if (clouds) clouds.style.background = p.clouds;
       const stops = win.querySelectorAll(`#sd-g-${slot} stop`); // angled clerestories (SVG)
       if (stops.length === 2) {
         stops[0].setAttribute("stop-color", sky.uTop);
@@ -1162,8 +1192,8 @@ class ShadeDashboardCard extends BaseElement {
         `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
         chip("office", "ALL OFFICE") +
       `</div>`;
-    const viewGroup = (group, html) =>
-      `<div data-view-group="${group}" data-view-display="flex" style="display:flex;align-self:stretch;align-items:center;gap:16px"><div data-view-divider style="width:1px;align-self:stretch;background:#E0D8C9"></div>${html}</div>`;
+    const viewGroup = (group, html, align = "center") =>
+      `<div data-view-group="${group}" data-view-display="flex" style="display:flex;align-self:stretch;align-items:${align};gap:16px"><div data-view-divider style="width:1px;align-self:stretch;background:#E0D8C9"></div>${html}</div>`;
 
     return `
 <style>
@@ -1225,7 +1255,7 @@ class ShadeDashboardCard extends BaseElement {
       </div>
       <div style="flex:1;overflow-x:auto;overflow-y:hidden;display:flex;align-items:center">
         <div data-view-group-list="main" style="display:flex;align-items:flex-end;gap:16px;padding:4px 10px 12px;margin:auto;flex-shrink:0">
-          ${viewGroup("south", south)}${viewGroup("west", west)}${viewGroup("north", north)}${viewGroup("hallway", hallway)}
+          ${viewGroup("south", south, "flex-end")}${viewGroup("west", west, "flex-end")}${viewGroup("north", north, "flex-end")}${viewGroup("hallway", hallway, "flex-end")}
         </div>
       </div>
     </div>

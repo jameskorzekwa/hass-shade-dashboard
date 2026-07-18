@@ -131,3 +131,16 @@ test("floors with no visible groups are not selectable", () => {
   assert.equal(resolveSelectableFloor(allHidden, "main", "up"), null);
   assert.match(cardSource, /tab\.style\.display = disabled \? "none" : ""/);
 });
+
+test("main-floor groups align with the lower window row", () => {
+  for (const [group, variable] of [["south", "south"], ["west", "west"], ["north", "north"], ["hallway", "hallway"]]) {
+    assert.match(cardSource, new RegExp(`viewGroup\\("${group}", ${variable}, "flex-end"\\)`));
+  }
+});
+
+test("clouds retain date-and-window seeded painterly geometry", () => {
+  assert.match(cardSource, /date\.getFullYear\(\) \* 366/);
+  assert.match(cardSource, /slot\.charCodeAt\(i\)/);
+  assert.match(cardSource, /const n = 2 \+ Math\.floor\(rng\(\) \* 2\)/);
+  assert.doesNotMatch(cardSource, /data-clouds=/);
+});
