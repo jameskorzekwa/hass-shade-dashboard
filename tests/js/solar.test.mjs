@@ -19,7 +19,7 @@ const cardPath = fileURLToPath(
 );
 const src = await readFile(cardPath);
 const cardSource = src.toString();
-const { skyPalette, solarPos, sunOnWall } = await import(
+const { loadDevicePreferences, loadSessionFloor, normalizeDevicePreferences, skyPalette, solarPos, sunOnWall } = await import(
   "data:text/javascript;base64," + src.toString("base64")
 );
 
@@ -91,4 +91,32 @@ test("settings buttons use the Home Assistant Material Design icon", () => {
 test("sun test offers display-independent playback speeds", () => {
   assert.match(cardSource, /data-suntest-speed[\s\S]*value="96">Fast[\s\S]*value="24">Medium[\s\S]*value="6">Slow/);
   assert.match(cardSource, /t\.min \+ \(t\.speed \|\| 96\) \* dt/);
+});
+
+test("device preferences normalize defaults and forward-compatible hidden groups", () => {
+  assert.deepEqual(normalizeDevicePreferences(null), { defaultFloor: "main", hiddenGroups: [] });
+  assert.deepEqual(
+    normalizeDevicePreferences({ defaultFloor: "up", hiddenGroups: ["west", "office", "west", "unknown"] }),
+    { defaultFloor: "up", hiddenGroups: ["west", "office"] }
+  );
+});
+
+test("device preferences and refresh floor tolerate unavailable or corrupt storage", () => {
+  const values = new Map([
+    ["shade-dashboard:device-preferences:v1", "{bad"],
+    ["shade-dashboard:active-floor:v1", "up"],
+  ]);
+  const storage = { getItem: (key) => values.get(key) || null };
+  assert.deepEqual(loadDevicePreferences(storage), { defaultFloor: "main", hiddenGroups: [] });
+  assert.equal(loadSessionFloor(storage), "up");
+  assert.equal(loadSessionFloor({ getItem: () => "settings" }), null);
+  assert.deepEqual(loadDevicePreferences({ getItem: () => { throw new Error("blocked"); } }), { defaultFloor: "main", hiddenGroups: [] });
+});
+
+test("settings expose device floor and per-group visibility controls", () => {
+  const groups = ["south", "west", "north", "hallway", "main_bedroom", "upstairs_hallway", "office"];
+  assert.match(cardSource, /data-pref-default-floor/);
+  assert.match(cardSource, /data-pref-group="\$\{group\}"/);
+  assert.deepEqual(normalizeDevicePreferences({ hiddenGroups: groups }).hiddenGroups, groups);
+  assert.match(cardSource, /this\._tab === "settings"[\s\S]*this\._settingsReturnTab/);
 });

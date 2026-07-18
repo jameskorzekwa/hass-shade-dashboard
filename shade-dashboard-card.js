@@ -25,6 +25,52 @@ const RING = "0 0 0 2px #F5F1EA, 0 0 0 5px #C67B3B";
 const ACCENT = "#C67B3B";
 const HEM = "#AA9C81"; // shade fabric bottom bar (kept distinct so it reads on every window)
 const SCENE_ACTIVE_BG = "color-mix(in oklab, #C67B3B 18%, #FFFDF9)";
+const DEVICE_PREFS_KEY = "shade-dashboard:device-preferences:v1";
+const SESSION_FLOOR_KEY = "shade-dashboard:active-floor:v1";
+const FLOOR_GROUPS = {
+  main: ["south", "west", "north", "hallway"],
+  up: ["main_bedroom", "upstairs_hallway", "office"],
+};
+const VIEW_GROUPS = [...FLOOR_GROUPS.main, ...FLOOR_GROUPS.up];
+
+export function normalizeDevicePreferences(value) {
+  const prefs = value && typeof value === "object" ? value : {};
+  const defaultFloor = prefs.defaultFloor === "up" ? "up" : "main";
+  const hiddenGroups = Array.isArray(prefs.hiddenGroups)
+    ? [...new Set(prefs.hiddenGroups.filter((group) => VIEW_GROUPS.includes(group)))]
+    : [];
+  return { defaultFloor, hiddenGroups };
+}
+
+export function loadDevicePreferences(storage) {
+  try {
+    const raw = storage && storage.getItem(DEVICE_PREFS_KEY);
+    return normalizeDevicePreferences(raw ? JSON.parse(raw) : null);
+  } catch (_e) {
+    return normalizeDevicePreferences(null);
+  }
+}
+
+function saveDevicePreferences(storage, prefs) {
+  try { if (storage) storage.setItem(DEVICE_PREFS_KEY, JSON.stringify(normalizeDevicePreferences(prefs))); } catch (_e) { /* storage unavailable */ }
+}
+
+export function loadSessionFloor(storage) {
+  try {
+    const floor = storage && storage.getItem(SESSION_FLOOR_KEY);
+    return floor === "main" || floor === "up" ? floor : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function saveSessionFloor(storage, floor) {
+  try { if (storage && (floor === "main" || floor === "up")) storage.setItem(SESSION_FLOOR_KEY, floor); } catch (_e) { /* storage unavailable */ }
+}
+
+function browserStorage(name) {
+  try { return typeof globalThis !== "undefined" ? globalThis[name] || null : null; } catch (_e) { return null; }
+}
 
 // Mirror of const.py (build_panel_config). Kept in sync by test_layout_sync.py.
 const DEFAULT_LAYOUT = {
@@ -402,7 +448,9 @@ class ShadeDashboardCard extends BaseElement {
     this._selected = null;
     this._dragging = false;
     this._lastScene = null;
-    this._tab = "main";
+    this._devicePrefs = loadDevicePreferences(browserStorage("localStorage"));
+    this._tab = loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor;
+    this._settingsReturnTab = this._tab;
     this._layout = DEFAULT_LAYOUT;
     // The unified cover.shade_* entities (see the integration's cover.py) now own
     // all live-position tracking server-side: their current_position is already
@@ -534,7 +582,9 @@ class ShadeDashboardCard extends BaseElement {
     this._builtMobile = mobile;
     // Keep _tab valid for the layout being built (panels differ per layout).
     if (mobile && this._tab !== "settings") this._tab = "home";
-    if (!mobile && this._tab === "home") this._tab = "main";
+    if (!mobile && this._tab === "home") {
+      this._tab = loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor;
+    }
     this.shadowRoot.innerHTML = mobile ? this._mobileTemplate() : this._template();
     this._built = true;
     this._wire();
@@ -545,6 +595,77 @@ class ShadeDashboardCard extends BaseElement {
   _isMobile() {
     const w = this.clientWidth || (typeof window !== "undefined" && window.innerWidth) || 1024;
     return w < 640;
+  }
+  _navigate(requested) {
+    let target = requested;
+    if (requested === "settings") {
+      if (this._tab === "settings") {
+        target = this._builtMobile
+          ? "home"
+          : (this._settingsReturnTab === "main" || this._settingsReturnTab === "up"
+              ? this._settingsReturnTab
+              : loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor);
+      } else {
+        this._settingsReturnTab = this._tab;
+      }
+    }
+    if (this._builtMobile && target !== "settings") target = "home";
+    if (!this._builtMobile && target === "home") {
+      target = loadSessionFloor(browserStorage("sessionStorage")) || this._devicePrefs.defaultFloor;
+    }
+    this._tab = target;
+    if (target === "main" || target === "up") {
+      this._settingsReturnTab = target;
+      saveSessionFloor(browserStorage("sessionStorage"), target);
+    }
+    this._update();
+  }
+  _groupVisible(group) {
+    return !this._devicePrefs.hiddenGroups.includes(group);
+  }
+  _saveDevicePrefs() {
+    this._devicePrefs = normalizeDevicePreferences(this._devicePrefs);
+    saveDevicePreferences(browserStorage("localStorage"), this._devicePrefs);
+  }
+  _wireDevicePrefs() {
+    const root = this.shadowRoot;
+    const defaultFloor = root.querySelector("[data-pref-default-floor]");
+    if (defaultFloor) defaultFloor.addEventListener("change", () => {
+      this._devicePrefs.defaultFloor = defaultFloor.value === "up" ? "up" : "main";
+      this._saveDevicePrefs();
+    });
+    root.querySelectorAll("[data-pref-group]").forEach((input) =>
+      input.addEventListener("change", () => {
+        const group = input.getAttribute("data-pref-group");
+        const hidden = new Set(this._devicePrefs.hiddenGroups);
+        if (input.checked) hidden.delete(group); else hidden.add(group);
+        this._devicePrefs.hiddenGroups = [...hidden];
+        this._saveDevicePrefs();
+        this._applyGroupVisibility();
+      })
+    );
+  }
+  _applyGroupVisibility() {
+    const root = this.shadowRoot;
+    root.querySelectorAll("[data-view-group]").forEach((el) => {
+      el.style.display = this._groupVisible(el.getAttribute("data-view-group")) ? (el.dataset.viewDisplay || "") : "none";
+    });
+    root.querySelectorAll("[data-view-group-list]").forEach((list) => {
+      let first = true;
+      list.querySelectorAll(":scope > [data-view-group]").forEach((group) => {
+        if (group.style.display === "none") return;
+        const dividerEl = group.querySelector(":scope > [data-view-divider]");
+        if (dividerEl) dividerEl.style.display = first ? "none" : "block";
+        first = false;
+      });
+    });
+    root.querySelectorAll("[data-floor-summary]").forEach((summary) => {
+      const floor = summary.getAttribute("data-floor-summary");
+      const groups = FLOOR_GROUPS[floor] || [];
+      const count = groups.filter((group) => this._groupVisible(group))
+        .reduce((total, group) => total + ((this._layout.groups || {})[group] || []).length, 0);
+      summary.textContent = `${count} visible shade${count === 1 ? "" : "s"}${floor === "main" ? " · scroll →" : ""}`;
+    });
   }
   // Rebuild the appropriate layout when the width crosses the breakpoint.
   _installResize() {
@@ -584,11 +705,30 @@ class ShadeDashboardCard extends BaseElement {
     };
     const chip = (id) =>
       `<span style="display:inline-block;font-size:11px;color:#4A4237;background:#F0EADE;border:1px solid #E2DACB;border-radius:7px;padding:2px 8px;margin:2px 4px 0 0">${nameOf(id)}</span>`;
+    const GROUP_LABELS = {
+      south: "South wall", west: "West wall", north: "North wall", hallway: "Main hallway",
+      main_bedroom: "Main bedroom", upstairs_hallway: "Upstairs hallway", office: "Kyle's office",
+    };
+    const visibilityRows = (floor) => FLOOR_GROUPS[floor].map((group) =>
+      `<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#4A4237;cursor:pointer"><input data-pref-group="${group}" type="checkbox" ${this._groupVisible(group) ? "checked" : ""}>${GROUP_LABELS[group]}</label>`
+    ).join("");
+    const devicePrefs = `<div style="border:1px solid #D8C6AC;border-radius:12px;background:#FFF9EF;padding:13px 14px;display:flex;flex-direction:column;gap:11px">
+      <div><div style="font-weight:700;font-size:13.5px;color:#26211B">This device</div><div style="font-size:11px;color:#8A8177;margin-top:2px">Saved only in this browser. Refresh restores the current floor; a new session starts on the default floor.</div></div>
+      <label style="display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;font-weight:600;color:#4A4237">Default floor
+        <select data-pref-default-floor style="padding:7px 9px;border-radius:9px;border:1px solid #D8C6AC;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;font-family:inherit;cursor:pointer">
+          <option value="main" ${this._devicePrefs.defaultFloor === "main" ? "selected" : ""}>Main Floor</option><option value="up" ${this._devicePrefs.defaultFloor === "up" ? "selected" : ""}>Upstairs</option>
+        </select>
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 22px">
+        <div style="display:flex;flex-direction:column;gap:7px"><strong style="font-size:11px;color:#8A8177;text-transform:uppercase;letter-spacing:1px">Main Floor</strong>${visibilityRows("main")}</div>
+        <div style="display:flex;flex-direction:column;gap:7px"><strong style="font-size:11px;color:#8A8177;text-transform:uppercase;letter-spacing:1px">Upstairs</strong>${visibilityRows("up")}</div>
+      </div>
+    </div>`;
     const sunTest = this._builtMobile ? "" : `<div style="border:1px solid #E2DACB;border-radius:12px;background:#FBF8F2;padding:12px 14px;display:flex;align-items:center;gap:12px">
       <div style="flex:1"><div style="font-weight:700;font-size:13.5px;color:#26211B">Sun test</div><div style="font-size:11px;color:#8A8177">Shows a time-of-day scrubber on the main views to preview the window light</div></div>
       <button data-suntest-on style="padding:8px 16px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:12px;cursor:pointer">Off</button>
     </div>`;
-    return sunTest + `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
+    return devicePrefs + sunTest + `<div style="font-size:12px;color:#8A8177;padding:0 2px 4px">Each button moves its shades in one synchronized gateway call — no scenes involved.</div>` +
       ORDER.filter((g) => groups[g])
         .map((g) => {
           const members = groups[g] || [];
@@ -968,6 +1108,8 @@ class ShadeDashboardCard extends BaseElement {
         `<div style="position:relative;display:flex;align-items:flex-end;gap:14px">${lowerCol("ko1")}${lowerCol("ko2")}</div>` +
         chip("office", "ALL OFFICE") +
       `</div>`;
+    const viewGroup = (group, html) =>
+      `<div data-view-group="${group}" data-view-display="flex" style="display:flex;align-self:stretch;align-items:center;gap:16px"><div data-view-divider style="width:1px;align-self:stretch;background:#E0D8C9"></div>${html}</div>`;
 
     return `
 <style>
@@ -1024,24 +1166,24 @@ class ShadeDashboardCard extends BaseElement {
 
     <div data-panel="main" style="flex-direction:column;gap:8px;flex:1;min-height:0;min-width:0">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Main Floor</span><span style="font-size:12px;color:#8A8177">Living room + hallway · 16 shades · scroll →</span></div>
+        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Main Floor</span><span data-floor-summary="main" style="font-size:12px;color:#8A8177"></span></div>
         <div style="display:flex;gap:8px"><button data-group="main_floor" data-dir="up" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Open floor</button><button data-group="main_floor" data-dir="down" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Close floor</button></div>
       </div>
       <div style="flex:1;overflow-x:auto;overflow-y:hidden;display:flex;align-items:center">
-        <div style="display:flex;align-items:flex-end;gap:16px;padding:4px 10px 12px;margin:auto;flex-shrink:0">
-          ${south}${divider()}${west}${divider()}${north}${divider()}${hallway}
+        <div data-view-group-list="main" style="display:flex;align-items:flex-end;gap:16px;padding:4px 10px 12px;margin:auto;flex-shrink:0">
+          ${viewGroup("south", south)}${viewGroup("west", west)}${viewGroup("north", north)}${viewGroup("hallway", hallway)}
         </div>
       </div>
     </div>
 
     <div data-panel="up" style="flex-direction:column;gap:8px;flex:1">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Upstairs</span><span style="font-size:12px;color:#8A8177">Main bedroom + hallway + office · 6 shades</span></div>
+        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:18px;font-weight:700">Upstairs</span><span data-floor-summary="up" style="font-size:12px;color:#8A8177"></span></div>
         <div style="display:flex;gap:8px"><button data-group="upstairs" data-dir="up" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Open floor</button><button data-group="upstairs" data-dir="down" style="padding:8px 14px;border-radius:10px;border:1px solid #E2DACB;background:#FFFDF9;font-weight:600;font-size:12px;cursor:pointer;color:#26211B">Close floor</button></div>
       </div>
       <div style="flex:1;display:flex;align-items:center;justify-content:center">
-        <div style="display:flex;align-items:center;gap:16px">
-          ${mainBedroom}${divider()}${upHall}${divider()}${office}
+        <div data-view-group-list="up" style="display:flex;align-items:center;gap:16px">
+          ${viewGroup("main_bedroom", mainBedroom)}${viewGroup("upstairs_hallway", upHall)}${viewGroup("office", office)}
         </div>
       </div>
     </div>
@@ -1088,7 +1230,7 @@ class ShadeDashboardCard extends BaseElement {
     const btn = (g, dir, txt) =>
       `<button data-group="${g}" data-dir="${dir}" style="padding:7px 14px;border-radius:9px;border:1px solid #DFD7C9;background:#FBF8F2;font-weight:600;font-size:12px;color:#4A4237;cursor:pointer">${txt}</button>`;
     const section = (s) =>
-      `<div style="border:1px solid #EAE2D4;border-radius:14px;background:#FFFDF9;padding:12px 12px 14px">` +
+      `<div data-view-group="${s.group}" style="border:1px solid #EAE2D4;border-radius:14px;background:#FFFDF9;padding:12px 12px 14px">` +
         `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="font-weight:700;font-size:14px">${s.label}</span><div style="display:flex;gap:8px">${btn(s.group, "up", "Open")}${btn(s.group, "down", "Close")}</div></div>` +
         `<div style="display:flex;flex-wrap:wrap;gap:12px 14px">${s.slots.map((slot) => (s.door ? mobileDoorTile(slot) : mobileWin(slot, isUpper(slot) ? GLASS_UPPER : GLASS_LOWER))).join("")}</div>` +
       `</div>`;
@@ -1148,8 +1290,9 @@ class ShadeDashboardCard extends BaseElement {
     );
     // tabs
     root.querySelectorAll("[data-tab]").forEach((el) =>
-      el.addEventListener("click", () => { this._tab = el.getAttribute("data-tab"); this._update(); })
+      el.addEventListener("click", () => this._navigate(el.getAttribute("data-tab")))
     );
+    this._wireDevicePrefs();
     // hidden sun-test controls (Settings tab, desktop only)
     this._wireSunTest();
     // group chips + floor buttons
@@ -1352,6 +1495,7 @@ class ShadeDashboardCard extends BaseElement {
     root.querySelectorAll("[data-panel]").forEach((p) => {
       p.style.display = p.getAttribute("data-panel") === this._tab ? "flex" : "none";
     });
+    this._applyGroupVisibility();
 
     // scenes highlight
     root.querySelectorAll("[data-scene]").forEach((el) => {
