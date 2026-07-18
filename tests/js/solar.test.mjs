@@ -87,3 +87,8 @@ test("settings buttons use the Home Assistant Material Design icon", () => {
   assert.equal((cardSource.match(/<ha-icon icon="mdi:cog"/g) || []).length, 2);
   assert.doesNotMatch(cardSource, /⚙/);
 });
+
+test("sun test offers display-independent playback speeds", () => {
+  assert.match(cardSource, /data-suntest-speed[\s\S]*value="96">Fast[\s\S]*value="24">Medium[\s\S]*value="6">Slow/);
+  assert.match(cardSource, /t\.min \+ \(t\.speed \|\| 96\) \* dt/);
+});
