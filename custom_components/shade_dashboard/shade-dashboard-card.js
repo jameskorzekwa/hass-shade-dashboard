@@ -202,14 +202,18 @@ const rgba = (hex, alpha) => {
 // into night. Each key holds the whole scene: four sky stops (zenith ->
 // horizon), a ground tint, and the cloud paint (dark body, sun-lit rim, and
 // the bright sky glowing behind a bank).
+// Sunset-window colors anchored to the user's reference palettes
+// (logosbynick.com beach sunsets): golden cream #ffcc77/#ffd077, vivid
+// coral-orange #fe784c/#fe6e02, deep indigo-lavender #1f2a4d/#2d3451, plum
+// #743a6d, crimson-pink #e63552, orchid #aa6fa8 fading through periwinkle.
 const SKY_KEYS = [
   [10.0, { zen: "#C3D2DA", high: "#D8DFE2", mid: "#E9E6DB", hor: "#E7E3CE", grd: "#A8B29B", body: "#E9ECEA", lit: "#FFFFFF", glow: "#FFF7E2" }],
-  [4.0, { zen: "#AFC4D2", high: "#CFD3CC", mid: "#F0DCB4", hor: "#F8D094", grd: "#B2A784", body: "#D6CCC0", lit: "#FFEFC2", glow: "#FFE3A4" }],
-  [1.5, { zen: "#98AFC9", high: "#C2BBAF", mid: "#F5C382", hor: "#FFAC55", grd: "#C09468", body: "#AE9A92", lit: "#FFDD9E", glow: "#FFC061" }],
-  [0.0, { zen: "#7E9ABB", high: "#A9989B", mid: "#F0A159", hor: "#FF8130", grd: "#A87A50", body: "#7E6F76", lit: "#FFC271", glow: "#FF9440" }],
-  [-1.8, { zen: "#5D7BA0", high: "#8A7590", mid: "#E07E52", hor: "#F25C28", grd: "#77563F", body: "#554A61", lit: "#FF9166", glow: "#F26438" }],
-  [-3.5, { zen: "#394F76", high: "#575478", mid: "#99586B", hor: "#BC4A47", grd: "#4E3F49", body: "#3A3A55", lit: "#DB7590", glow: "#B44E58" }],
-  [-5.5, { zen: "#1F3357", high: "#2A3D64", mid: "#414668", hor: "#574560", grd: "#2E3549", body: "#29324E", lit: "#6F5A83", glow: "#4E4362" }],
+  [4.0, { zen: "#A9C0D2", high: "#CDD2C9", mid: "#F2DCA8", hor: "#FFD077", grd: "#B2A47C", body: "#D6CBBC", lit: "#FFEFC2", glow: "#FFE099" }],
+  [1.5, { zen: "#8FA9C8", high: "#C0B7A8", mid: "#FFC97C", hor: "#FFAE42", grd: "#C29160", body: "#AC968C", lit: "#FFDD9E", glow: "#FFBC4D" }],
+  [0.0, { zen: "#7492B8", high: "#A98F9A", mid: "#FFAB56", hor: "#FF7519", grd: "#A87747", body: "#6E6480", lit: "#FFC873", glow: "#FF9440" }],
+  [-1.8, { zen: "#52719D", high: "#8A6C92", mid: "#F26A4A", hor: "#F04E17", grd: "#754F3B", body: "#4E4468", lit: "#FF8E63", glow: "#F25428" }],
+  [-3.5, { zen: "#35486F", high: "#5C4E80", mid: "#A25578", hor: "#C43A50", grd: "#4C3C4E", body: "#3A3760", lit: "#E8799B", glow: "#B4485E" }],
+  [-5.5, { zen: "#223760", high: "#2E3F6B", mid: "#454A78", hor: "#5D4770", grd: "#2E3450", body: "#293356", lit: "#7E5F92", glow: "#4E4266" }],
   [-8.0, { zen: "#0F1A2F", high: "#131F38", mid: "#1A2740", hor: "#202D46", grd: "#192134", body: "#1C2740", lit: "#24304C", glow: "#202C45" }],
 ];
 const sampleSky = (elv) => {
@@ -886,42 +890,43 @@ class ShadeDashboardCard extends BaseElement {
     // Thin, high cirrus streaks — first to color, last to fade.
     const cirrus = 1 + Math.floor(rng() * 2);
     for (let i = 0; i < cirrus; i++) {
-      const y = 5 + rng() * 22;
-      const rx = 48 + rng() * 40, ry = 1.1 + rng() * 1.7;
+      const y = 6 + rng() * 20;
+      const rx = 30 + rng() * 26, ry = 0.9 + rng() * 1.2;
       const x = ((rng() * 140 + minutes * (0.05 + rng() * 0.1)) % 150) - 15;
-      const a = palette.cloudAlpha * (0.4 + 0.3 * rng());
+      const a = palette.cloudAlpha * (0.38 + 0.24 * rng());
       const lit = band("lit", 0.05);
-      layers.push(`radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(1)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,${rgba(lit, a)} 0,${rgba(lit, 0)} 100%)`);
+      layers.push(`radial-gradient(ellipse ${rx.toFixed(0)}% ${ry.toFixed(1)}% at ${x.toFixed(1)}% ${y.toFixed(1)}%,${rgba(lit, a)} 0,${rgba(lit, a * 0.7)} 55%,${rgba(lit, 0)} 100%)`);
     }
     const n = 2 + Math.floor(rng() * 2); // cloud banks in this pane tonight
     for (let i = 0; i < n; i++) {
-      const big = i === 0; // one dominant bank low in the sky, smaller ones higher
-      const y = big ? 48 + rng() * 26 : 12 + rng() * 32;
-      const alt = Math.min(1, Math.max(0, y / 80));
+      const big = i === 0; // one leading bank lower in the sky, smaller ones higher
+      const y = big ? 38 + rng() * 22 : 14 + rng() * 24;
+      const alt = Math.min(1, Math.max(0, y / 70));
       const body = band("body", alt), lit = band("lit", alt);
-      const w = big ? 62 + rng() * 34 : 26 + rng() * 22;
-      const h = big ? 9 + rng() * 7 : 4.5 + rng() * 3.5;
+      const w = big ? 36 + rng() * 20 : 16 + rng() * 13;
+      const h = big ? 6 + rng() * 4 : 3.2 + rng() * 2.4;
       const x = ((rng() * 140 + minutes * (0.04 + rng() * 0.08)) % 150) - 15;
-      const a = palette.cloudAlpha * (0.8 + 0.2 * rng());
-      // Sun-lit underside: a brilliant rim along the bank's base plus a hot
-      // spot at the sunward end — the contrast that makes real sunsets read.
-      layers.push(`radial-gradient(ellipse ${(w * 0.56).toFixed(1)}% ${(h * 0.34).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 0.42).toFixed(1)}%,${rgba(lit, Math.min(1, a * 1.5))} 0,${rgba(lit, a * 0.5)} 55%,${rgba(lit, 0)} 100%)`);
-      if (big) layers.push(`radial-gradient(ellipse ${(w * 0.2).toFixed(1)}% ${(h * 0.3).toFixed(1)}% at ${(x - w * 0.3).toFixed(1)}% ${(y + h * 0.34).toFixed(1)}%,${rgba(lit, Math.min(1, a * 1.9))} 0,${rgba(lit, 0)} 100%)`);
-      // Puffy body: overlapping lobes, tallest near the middle, silhouetting
-      // as the palette darkens.
+      const a = palette.cloudAlpha * (0.48 + 0.22 * rng());
+      // Sun-lit underside: a tight brilliant rim hugging the bank's base plus
+      // a hot spot at the sunward end — the contrast that makes sunsets read.
+      layers.push(`radial-gradient(ellipse ${(w * 0.5).toFixed(1)}% ${(h * 0.26).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 0.38).toFixed(1)}%,${rgba(lit, Math.min(1, a * 1.8))} 0,${rgba(lit, Math.min(1, a * 1.8))} 45%,${rgba(lit, a * 0.6)} 70%,${rgba(lit, 0)} 100%)`);
+      if (big) layers.push(`radial-gradient(ellipse ${(w * 0.16).toFixed(1)}% ${(h * 0.24).toFixed(1)}% at ${(x - w * 0.28).toFixed(1)}% ${(y + h * 0.3).toFixed(1)}%,${rgba(lit, Math.min(1, a * 2.2))} 0,${rgba(lit, 0)} 100%)`);
+      // Defined puffy body: overlapping lobes that hold their density to a
+      // crisp edge before falling off, so the bank reads as a CLOUD with a
+      // shape — not a smudge.
       const puffs = big ? 3 + Math.floor(rng() * 2) : 2;
       for (let k = 0; k < puffs; k++) {
         const off = k - (puffs - 1) / 2;
-        const px = x + off * w * 0.27 + (rng() - 0.5) * w * 0.07;
-        const prx = w * (0.33 + rng() * 0.09) * (1 - 0.16 * Math.abs(off));
-        const pry = h * (0.72 + rng() * 0.5);
-        const py = y - pry * (0.16 + 0.36 * rng());
-        layers.push(`radial-gradient(ellipse ${prx.toFixed(1)}% ${pry.toFixed(1)}% at ${px.toFixed(1)}% ${py.toFixed(1)}%,${rgba(body, a)} 0,${rgba(body, a * 0.82)} 58%,${rgba(body, 0)} 100%)`);
+        const px = x + off * w * 0.3 + (rng() - 0.5) * w * 0.06;
+        const prx = w * (0.3 + rng() * 0.07) * (1 - 0.15 * Math.abs(off));
+        const pry = h * (0.68 + rng() * 0.4);
+        const py = y - pry * (0.28 + 0.3 * rng());
+        layers.push(`radial-gradient(ellipse ${prx.toFixed(1)}% ${pry.toFixed(1)}% at ${px.toFixed(1)}% ${py.toFixed(1)}%,${rgba(body, a)} 0,${rgba(body, a)} 60%,${rgba(body, a * 0.35)} 82%,${rgba(body, 0)} 100%)`);
       }
       // The bright sky burning behind the big bank, strongest near the horizon.
       if (big) {
         const glow = band("glow", alt);
-        layers.push(`radial-gradient(ellipse ${(w * 1.3).toFixed(1)}% ${(h * 2.4).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 1.5).toFixed(1)}%,${rgba(glow, a * 0.55)} 0,${rgba(glow, 0)} 100%)`);
+        layers.push(`radial-gradient(ellipse ${(w * 1.25).toFixed(1)}% ${(h * 2.1).toFixed(1)}% at ${x.toFixed(1)}% ${(y + h * 1.4).toFixed(1)}%,${rgba(glow, a * 0.5)} 0,${rgba(glow, 0)} 100%)`);
       }
     }
     return layers;
@@ -932,14 +937,31 @@ class ShadeDashboardCard extends BaseElement {
     const walls = this._geoWalls();
     const ridge = this._ridgeEl();
     // Below the WNW ridge late in the day (or below the horizon any time):
-    // lights out, with a soft fade over the last ~1.5 deg of descent.
+    // lights out. Over the last ~5 minutes of descent (the sun drops about
+    // 0.21 deg/min here) the disc doesn't just dim — it also shrinks away
+    // (see `shrink` below), the way the ridge eats the real sun.
     const gate = az != null && az > 240 ? ridge - 0.2 : -0.3;
-    const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.5));
+    const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.05));
+    const shrink = 0.35 + 0.65 * dayFade;
+    // Sunset afterglow: right AFTER the sun drops behind the gate the west
+    // sky is at its most orange — swell the warm glow to a peak, hold it for
+    // ~10 minutes, then fade it out over the following quarter hour. (Runs
+    // in reverse as a dawn glow before sunrise.) Degrees below the gate
+    // stand in for minutes at ~0.21 deg/min.
+    const dBelow = el == null ? 0 : gate - el;
+    const after =
+      dBelow <= 0 ? 0
+      : dBelow < 2.1 ? Math.min(1, dBelow / 0.3)
+      : Math.max(0, 1 - (dBelow - 2.1) / 3);
     // Ambient golden-hour glow: at sunrise/sunset EVERY covered shade leaks a
     // little warm light around its edges (the whole sky is lit), on top of the
     // stronger direct leak on panes the sun is actually near. Same horizon
-    // bell as the sky tint, gated by daylight/ridge like the direct light.
-    const ambient = 0.55 * Math.exp(-Math.pow((el == null ? 90 : el) - 1, 2) / 16) * dayFade;
+    // bell as the sky tint, gated by daylight/ridge like the direct light —
+    // floored by the post-sunset afterglow swell.
+    const ambient = Math.max(
+      0.55 * Math.exp(-Math.pow((el == null ? 90 : el) - 1, 2) / 16) * dayFade,
+      0.7 * after
+    );
     // Diffuse daylight: the sky lights every facade all day, so a fully
     // closed shade still glows through its weave and leaks at the edges
     // even when the sun is nowhere near that pane (fades out after dusk).
@@ -957,17 +979,21 @@ class ShadeDashboardCard extends BaseElement {
     const warmth = Math.exp(-Math.pow(elv - 1, 2) / 20);
     const wmix = (w, a) => w.map((c, i) => Math.round(c + (a[i] - c) * warmth)).join(",");
     const LC = {
-      uCore: wmix([255, 253, 248], [255, 238, 196]),
-      uIn: wmix([255, 249, 238], [255, 219, 150]),
       uMid: wmix([255, 243, 228], [255, 199, 124]),
-      uOut: wmix([255, 240, 222], [255, 186, 108]),
-      eCore: wmix([255, 253, 247], [255, 240, 200]),
-      eMid: wmix([255, 251, 243], [255, 233, 186]),
-      eOut: wmix([255, 248, 238], [255, 227, 176]),
+      eCore: wmix([255, 253, 247], [255, 214, 168]),
+      eMid: wmix([255, 251, 243], [255, 190, 140]),
+      eOut: wmix([255, 248, 238], [255, 172, 140]),
       wCore: wmix([255, 251, 243], [255, 235, 185]),
       wMid: wmix([255, 246, 232], [255, 214, 150]),
-      aTop: wmix([255, 252, 245], [255, 238, 200]),
-      aBot: wmix([255, 250, 241], [255, 233, 192]),
+      aTop: wmix([255, 252, 245], [255, 208, 160]),
+      aBot: wmix([255, 250, 241], [255, 190, 150]),
+      dCore: wmix([255, 254, 248], [255, 253, 243]),
+      dBody: wmix([255, 252, 240], [255, 245, 193]),
+      ring1: wmix([255, 232, 178], [255, 184, 74]),
+      ring2: wmix([255, 214, 150], [255, 142, 35]),
+      hCore: wmix([255, 250, 238], [255, 214, 130]),
+      hMid: wmix([255, 244, 224], [255, 192, 101]),
+      hOut: wmix([255, 238, 212], [255, 167, 67]),
     };
     // Admitted-light bookkeeping for the interior-brightness simulation:
     // every pane contributes (glass area) x (how open it is) x (light on it).
@@ -1002,14 +1028,34 @@ class ShadeDashboardCard extends BaseElement {
         sumOpen += area * admit;
         sumBeam += area * admit * I;
       }
-      const R = 8 * pxFt, core = 1.2 * pxFt;
+      const R = (8 + 2 * warmth) * pxFt * (0.6 + 0.4 * dayFade);
       if (I > 0.02 && w) {
-        css =
+        // The visible sun: a blinding, HARD-EDGED white disc with a crisp
+        // golden rim and a tight saturated corona, layered over the wide
+        // halo. Stark white at midday; near the horizon it swells and the
+        // rim/corona deepen to orange, so sunset through the glass is
+        // unmistakable — but the ball itself stays white-hot, the way a real
+        // low sun still blinds. The gradient sits at the sun's true spot in
+        // this pane, so the disc simply clips away whenever the sun isn't
+        // actually visible here. It paints ABOVE this evening's clouds, so
+        // the ball punches through the banks instead of drowning in them.
+        const disc = Math.max(2, (0.55 + 0.45 * warmth) * pxFt * shrink);
+        const flare = disc * 4.2;
+        const aDisc = Math.min(1, 1.3 * I); // full-blast whenever meaningfully lit
+        const discG =
+          `radial-gradient(circle ${flare.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
+          `rgba(${LC.dCore},${aDisc.toFixed(3)}) 0,` +
+          `rgba(${LC.dBody},${aDisc.toFixed(3)}) ${disc.toFixed(0)}px,` +
+          `rgba(${LC.ring1},${Math.min(1, (0.95 + 0.2 * warmth) * I).toFixed(3)}) ${(disc * 1.3).toFixed(0)}px,` +
+          `rgba(${LC.ring2},${((0.55 + 0.15 * warmth) * I).toFixed(3)}) ${(disc * 2.3).toFixed(0)}px,` +
+          `rgba(${LC.ring2},0) ${flare.toFixed(0)}px)`;
+        const halo =
           `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
-          `rgba(${LC.uCore},${(0.95 * I).toFixed(3)}) 0,` +
-          `rgba(${LC.uIn},${(0.85 * I).toFixed(3)}) ${core.toFixed(0)}px,` +
-          `rgba(${LC.uMid},${(0.5 * I).toFixed(3)}) ${(R * 0.38).toFixed(0)}px,` +
-          `rgba(${LC.uOut},0) ${R.toFixed(0)}px)`;
+          `rgba(${LC.hCore},${(0.9 * I).toFixed(3)}) 0,` +
+          `rgba(${LC.hMid},${(0.65 * I).toFixed(3)}) ${(R * 0.36).toFixed(0)}px,` +
+          `rgba(${LC.hOut},${(0.35 * I).toFixed(3)}) ${(R * 0.66).toFixed(0)}px,` +
+          `rgba(${LC.hOut},0) ${R.toFixed(0)}px)`;
+        css = `${discG},${halo}`;
       }
       // Light leaking around the shade: bright slivers down the frame sides
       // (near-sun side hardest), a seep line above the hem, a whisper at the

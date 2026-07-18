@@ -163,3 +163,13 @@ test("cloud banks render lit rims, silhouette bodies, and back-glow", () => {
   assert.match(cardSource, /band\("glow", alt\)/);
   assert.match(cardSource, /<stop offset="\.55"/);
 });
+
+test("the stark sun disc punches through the clouds", () => {
+  // Hard-edged white disc + golden rim + corona (the c97fa63 stark sun) ...
+  assert.match(cardSource, /dCore: wmix/);
+  assert.match(cardSource, /ring1: wmix/);
+  assert.match(cardSource, /const flare = disc \* 4\.2/);
+  assert.match(cardSource, /const shrink = 0\.35 \+ 0\.65 \* dayFade/);
+  // ... painted ABOVE the cloud layers so it can never drown in them.
+  assert.match(cardSource, /layers\.unshift\(css\)/);
+});
