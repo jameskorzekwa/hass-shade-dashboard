@@ -934,11 +934,11 @@ class ShadeDashboardCard extends BaseElement {
     const ridge = this._ridgeEl();
     // Below the WNW ridge late in the day (or below the horizon any time):
     // lights out. Over the last ~5 minutes of descent (the sun drops about
-    // 0.21 deg/min here) the disc doesn't just dim — it also shrinks away
-    // (see `shrink` below), the way the ridge eats the real sun.
+    // 0.21 deg/min here) the ball is OCCLUDED from below — a hard flat cut
+    // line rises through it (see `cutPx` below), the way a flat ridge line
+    // eats the real sun bottom-to-top.
     const gate = az != null && az > 240 ? ridge - 0.2 : -0.3;
     const dayFade = az == null || el == null ? 0 : Math.min(1, Math.max(0, (el - gate) / 1.05));
-    const shrink = 0.35 + 0.65 * dayFade;
     // Sunset afterglow: right AFTER the sun drops behind the gate the west
     // sky is at its most orange — swell the warm glow to a peak, hold it for
     // ~10 minutes, then fade it out over the following quarter hour. (Runs
@@ -1035,29 +1035,30 @@ class ShadeDashboardCard extends BaseElement {
         // this pane, so the disc simply clips away whenever the sun isn't
         // actually visible here. It paints ABOVE this evening's clouds, so
         // the ball punches through the banks instead of drowning in them.
-        const disc = Math.max(2, (0.55 + 0.45 * warmth) * pxFt * shrink);
+        const disc = Math.max(2, (0.55 + 0.45 * warmth) * pxFt);
         const flare = disc * 4.2;
-        // The ridge swallowing the ball: through the last degree of descent
-        // the disc doesn't just shrink — it flattens into a bottom-pinned
-        // dome, then a glowing sliver, exactly like a sun sliding behind a
-        // mountain line. `squash` is the surviving vertical fraction, and the
-        // center shifts down so the dome's BASE stays put while its crown
-        // sinks — the visual signature of going behind something.
-        const squash = 0.22 + 0.78 * dayFade;
+        // Behind a FLAT horizon: the ball is never deformed. The disc layer
+        // is painted into a height-limited no-repeat box whose bottom edge is
+        // a razor-straight cut line. As the sun sinks its last degree the cut
+        // rises — first shaving the corona, then sliding up through the still
+        // perfectly ROUND ball until only its crown shows, exactly like a
+        // sphere disappearing bottom-to-top behind a flat ridge line.
         const hostH = host ? host.clientHeight || 190 : 190;
-        const cyS = cy + ((disc * (1 - squash)) / hostH) * 100;
+        const cyPx = (cy / 100) * hostH;
+        const sink = 1 - dayFade;
+        const cutPx = Math.max(0, cyPx + flare - sink * (flare + disc));
         const aDisc = Math.min(1, 1.3 * I); // full-blast whenever meaningfully lit
         const discG =
-          `radial-gradient(${flare.toFixed(0)}px ${Math.max(1, flare * squash).toFixed(0)}px at ${cx.toFixed(1)}% ${cyS.toFixed(1)}%,` +
+          `radial-gradient(circle ${flare.toFixed(0)}px at ${cx.toFixed(1)}% ${cyPx.toFixed(0)}px,` +
           `rgba(${LC.dCore},${aDisc.toFixed(3)}) 0,` +
           `rgba(${LC.dBody},${aDisc.toFixed(3)}) ${disc.toFixed(0)}px,` +
           `rgba(${LC.ring1},${Math.min(1, (0.95 + 0.2 * warmth) * I).toFixed(3)}) ${(disc * 1.3).toFixed(0)}px,` +
           `rgba(${LC.ring2},${((0.55 + 0.15 * warmth) * I).toFixed(3)}) ${(disc * 2.3).toFixed(0)}px,` +
-          `rgba(${LC.ring2},0) ${flare.toFixed(0)}px)`;
-        // The halo flattens with it (more gently), pooling along the ridge
-        // line the way the last light smears sideways at true sunset.
+          `rgba(${LC.ring2},0) ${flare.toFixed(0)}px) 0 0 / 100% ${cutPx.toFixed(0)}px no-repeat`;
+        // The halo is atmospheric glow, not the ball — it stays round and
+        // uncut, pooling above the ridge as the last light.
         const halo =
-          `radial-gradient(${R.toFixed(0)}px ${Math.max(1, R * (0.55 + 0.45 * squash)).toFixed(0)}px at ${cx.toFixed(1)}% ${cyS.toFixed(1)}%,` +
+          `radial-gradient(circle ${R.toFixed(0)}px at ${cx.toFixed(1)}% ${cy.toFixed(1)}%,` +
           `rgba(${LC.hCore},${(0.9 * I).toFixed(3)}) 0,` +
           `rgba(${LC.hMid},${(0.65 * I).toFixed(3)}) ${(R * 0.36).toFixed(0)}px,` +
           `rgba(${LC.hOut},${(0.35 * I).toFixed(3)}) ${(R * 0.66).toFixed(0)}px,` +
