@@ -18,7 +18,8 @@ const cardPath = fileURLToPath(
   new URL("../../custom_components/shade_dashboard/shade-dashboard-card.js", import.meta.url)
 );
 const src = await readFile(cardPath);
-const { solarPos, sunOnWall } = await import(
+const cardSource = src.toString();
+const { loadDevicePreferences, loadSessionFloor, normalizeDevicePreferences, resolveSelectableFloor, skyPalette, solarPos, sunOnWall } = await import(
   "data:text/javascript;base64," + src.toString("base64")
 );
 
@@ -64,4 +65,127 @@ test("sun behind a wall is flagged", () => {
   const west = { az: 295.0, viewer_x: 8.34, viewer_d: 18.0, eye_h: 5.4 };
   const morning = solarPos(Date.UTC(2026, 6, 14, 14, 0), LAT, LON); // 8:00 MDT, ENE sun
   assert.equal(sunOnWall(west, morning.az, morning.el).behind, true);
+});
+
+test("blue hour overtakes the clear sky before cloud warmth fades", () => {
+  const sunset = skyPalette(0);
+  const earlyTwilight = skyPalette(-2.5);
+  const lateTwilight = skyPalette(-5);
+
+  assert.ok(earlyTwilight.twilight > 0.55, "open sky should turn substantially blue soon after sunset");
+  assert.ok(earlyTwilight.skyWarm < sunset.skyWarm * 0.2, "warm sky wash should fall away quickly");
+  assert.ok(earlyTwilight.cloudWarm > 0.7, "clouds should retain strong orange light during early blue hour");
+  assert.ok(lateTwilight.cloudWarm > lateTwilight.skyWarm * 10, "cloud color should outlast the warm sky");
+  assert.ok(lateTwilight.cloudAlpha > 0.2, "orange cloud banks should remain visible against deep twilight");
+});
+
+test("sun test shade controls are simulation-only", () => {
+  assert.equal((cardSource.match(/data-suntest-shades=/g) || []).length, 2);
+  assert.match(cardSource, /this\._sunTest\.shadePos = button\.getAttribute/);
+  assert.doesNotMatch(cardSource, /data-group="all" data-dir="(?:up|down)" title="(?:Open|Close) every shade"/);
+});
+
+test("settings buttons use the Home Assistant Material Design icon", () => {
+  assert.equal((cardSource.match(/<ha-icon icon="mdi:cog"/g) || []).length, 2);
+  assert.doesNotMatch(cardSource, /⚙/);
+});
+
+test("sun test offers display-independent playback speeds", () => {
+  assert.match(cardSource, /data-suntest-speed[\s\S]*value="96">Fast[\s\S]*value="24">Medium[\s\S]*value="6">Slow/);
+  assert.match(cardSource, /t\.min \+ \(t\.speed \|\| 96\) \* dt/);
+});
+
+test("device preferences normalize defaults and forward-compatible hidden groups", () => {
+  assert.deepEqual(normalizeDevicePreferences(null), { defaultFloor: "main", hiddenGroups: [] });
+  assert.deepEqual(
+    normalizeDevicePreferences({ defaultFloor: "up", hiddenGroups: ["west", "office", "west", "unknown"] }),
+    { defaultFloor: "up", hiddenGroups: ["west", "office"] }
+  );
+});
+
+test("device preferences and refresh floor tolerate unavailable or corrupt storage", () => {
+  const values = new Map([
+    ["shade-dashboard:device-preferences:v1", "{bad"],
+    ["shade-dashboard:active-floor:v1", "up"],
+  ]);
+  const storage = { getItem: (key) => values.get(key) || null };
+  assert.deepEqual(loadDevicePreferences(storage), { defaultFloor: "main", hiddenGroups: [] });
+  assert.equal(loadSessionFloor(storage), "up");
+  assert.equal(loadSessionFloor({ getItem: () => "settings" }), null);
+  assert.deepEqual(loadDevicePreferences({ getItem: () => { throw new Error("blocked"); } }), { defaultFloor: "main", hiddenGroups: [] });
+});
+
+test("settings expose device floor and per-group visibility controls", () => {
+  const groups = ["south", "west", "north", "hallway", "main_bedroom", "upstairs_hallway", "office"];
+  assert.match(cardSource, /data-pref-default-floor/);
+  assert.match(cardSource, /data-pref-group="\$\{group\}"/);
+  assert.deepEqual(normalizeDevicePreferences({ hiddenGroups: groups }).hiddenGroups, groups);
+  assert.match(cardSource, /this\._tab === "settings"[\s\S]*this\._settingsReturnTab/);
+});
+
+test("floors with no visible groups are not selectable", () => {
+  const mainHidden = { defaultFloor: "main", hiddenGroups: ["south", "west", "north", "hallway"] };
+  assert.equal(normalizeDevicePreferences(mainHidden).defaultFloor, "up");
+  assert.equal(resolveSelectableFloor(mainHidden, "main"), "up");
+  const allHidden = { hiddenGroups: ["south", "west", "north", "hallway", "main_bedroom", "upstairs_hallway", "office"] };
+  assert.equal(resolveSelectableFloor(allHidden, "main", "up"), null);
+  assert.match(cardSource, /tab\.style\.display = disabled \? "none" : ""/);
+});
+
+test("main-floor groups align with the lower window row", () => {
+  for (const [group, variable] of [["south", "south"], ["west", "west"], ["north", "north"], ["hallway", "hallway"]]) {
+    assert.match(cardSource, new RegExp(`viewGroup\\("${group}", ${variable}, "flex-end"\\)`));
+  }
+});
+
+test("clouds retain date-and-window seeded painterly geometry", () => {
+  assert.match(cardSource, /date\.getFullYear\(\) \* 366/);
+  assert.match(cardSource, /slot\.charCodeAt\(i\)/);
+  assert.match(cardSource, /const bands = 9 \+ Math\.floor\(rng\(\) \* 5\)/);
+  assert.doesNotMatch(cardSource, /data-clouds=/);
+});
+
+test("sunset palette follows the real sky color progression", () => {
+  const rgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const warmth = (h) => rgb(h)[0] - rgb(h)[2]; // red minus blue
+  const lum = (h) => { const [r, g, b] = rgb(h); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const day = skyPalette(10), peak = skyPalette(-1.5), late = skyPalette(-3.5), blue = skyPalette(-5.5);
+  assert.ok(lum(day.hor) > 180, "daytime horizon stays bright and neutral");
+  assert.ok(warmth(peak.hor) > 100, "afterglow horizon should burn orange-red");
+  assert.ok(warmth(peak.zen) < 0, "zenith stays cool while the horizon burns");
+  assert.ok(lum(peak.mid) > lum(peak.zen), "the sky brightens toward the sunset horizon");
+  assert.ok(lum(blue.zen) < 60 && warmth(blue.zen) < -20, "blue hour zenith turns deep blue");
+  assert.ok(warmth(late.cloudHi.lit) > warmth(late.cloudLo.lit), "high clouds hold warm light longest");
+});
+
+test("clouds form a horizon-biased streak deck like the reference photo", () => {
+  // Long thin bands with a distribution biased toward the horizon, pastel
+  // veils across the upper sky, and molten filaments hugging the glow line.
+  assert.match(cardSource, /Math\.pow\(rng\(\), 0\.58\)/);
+  assert.match(cardSource, /const veils = 2 \+ Math\.floor\(rng\(\) \* 2\)/);
+  assert.match(cardSource, /const hot = 2 \+ Math\.floor\(rng\(\) \* 2\)/);
+  assert.match(cardSource, /<stop offset="\.55"/);
+});
+
+test("the setting sun shrinks to a pinpoint, staying round", () => {
+  // The ball dwindles hard through the last degree — down to 8% of its
+  // size — with no squashing and no clipping.
+  assert.match(cardSource, /const shrink = 0\.08 \+ 0\.92 \* dayFade/);
+  assert.match(cardSource, /pxFt \* shrink/);
+  assert.match(cardSource, /radial-gradient\(circle \$\{flare\.toFixed\(0\)\}px/);
+  assert.doesNotMatch(cardSource, /squash|cutPx/);
+});
+
+test("the sliding door sees the sky like every other pane", () => {
+  assert.match(cardSource, /const winDoor[\s\S]{0,600}sunUnder\(slot\)/);
+});
+
+test("the stark sun disc punches through the clouds", () => {
+  // Hard-edged white disc + golden rim + corona (the c97fa63 stark sun) ...
+  assert.match(cardSource, /dCore: wmix/);
+  assert.match(cardSource, /ring1: wmix/);
+  assert.match(cardSource, /const flare = disc \* 4\.2/);
+  assert.match(cardSource, /const shrink = 0\.08 \+ 0\.92 \* dayFade/);
+  // ... painted ABOVE the cloud layers so it can never drown in them.
+  assert.match(cardSource, /layers\.unshift\(css\)/);
 });
