@@ -18,6 +18,7 @@ const cardPath = fileURLToPath(
   new URL("../../custom_components/shade_dashboard/shade-dashboard-card.js", import.meta.url)
 );
 const src = await readFile(cardPath);
+const cardSource = src.toString();
 const { skyPalette, solarPos, sunOnWall } = await import(
   "data:text/javascript;base64," + src.toString("base64")
 );
@@ -76,4 +77,13 @@ test("blue hour overtakes the clear sky before cloud warmth fades", () => {
   assert.ok(earlyTwilight.cloudWarm > 0.7, "clouds should retain strong orange light during early blue hour");
   assert.ok(lateTwilight.cloudWarm > lateTwilight.skyWarm * 10, "cloud color should outlast the warm sky");
   assert.ok(lateTwilight.cloudAlpha > 0.2, "orange cloud banks should remain visible against deep twilight");
+});
+
+test("sun test exposes synchronized whole-house controls", () => {
+  assert.match(cardSource, /data-suntest-bar[\s\S]*data-group="all" data-dir="up"[\s\S]*data-group="all" data-dir="down"/);
+});
+
+test("settings buttons use the Home Assistant Material Design icon", () => {
+  assert.equal((cardSource.match(/<ha-icon icon="mdi:cog"/g) || []).length, 2);
+  assert.doesNotMatch(cardSource, /⚙/);
 });

@@ -991,11 +991,15 @@ class ShadeDashboardCard extends BaseElement {
     <div style="display:flex;gap:8px;align-items:center">
       <button data-tab="main" class="pill">Main Floor</button>
       <button data-tab="up" class="pill">Upstairs</button>
-      <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:26px;line-height:1"><span style="display:block;transform:translateY(-1px)">⚙</span></button>
+      <button data-tab="settings" class="pill" title="Settings" aria-label="Settings" style="margin-left:auto;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;color:#4A4237"><ha-icon icon="mdi:cog" style="display:block;width:24px;height:24px;--mdc-icon-size:24px"></ha-icon></button>
     </div>
 
     <div data-suntest-bar style="display:none;align-items:center;gap:10px;padding:9px 12px;border:1px solid #E8C9A4;border-radius:12px;background:#FBF4E8">
       <span style="font-size:12px;font-weight:700;color:#A06B2E">☀ Sun test</span>
+      <div style="display:flex;gap:6px">
+        <button data-group="all" data-dir="up" title="Open every shade" style="height:32px;padding:0 10px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:11px;cursor:pointer;white-space:nowrap">Open all</button>
+        <button data-group="all" data-dir="down" title="Close every shade" style="height:32px;padding:0 10px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-weight:600;font-size:11px;cursor:pointer;white-space:nowrap">Close all</button>
+      </div>
       <button data-suntest-play title="Play the day" style="width:32px;height:32px;border-radius:9px;border:1px solid #E2DACB;background:#FFFDF9;color:#26211B;font-size:13px;cursor:pointer">▶</button>
       <input data-suntest-scrub type="range" min="270" max="1290" step="2" autocomplete="off" style="flex:1;min-width:120px">
       <span data-suntest-time style="font:600 12px ui-monospace,Menlo,monospace;min-width:64px;text-align:right"></span>
@@ -1089,7 +1093,7 @@ class ShadeDashboardCard extends BaseElement {
 <div class="mframe">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;flex-shrink:0">
     <div><div style="font-size:20px;font-weight:700">Shades</div><div data-summary style="font-size:11px;color:#8A8177;margin-top:1px"></div></div>
-    <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;font-size:26px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center"><span style="display:block;transform:translateY(-1px)">⚙</span></button>
+    <button data-tab="settings" title="Settings" aria-label="Settings" style="width:40px;height:40px;border-radius:999px;border:1px solid #E2DACB;background:#FFFDF9;color:#4A4237;cursor:pointer;display:inline-flex;align-items:center;justify-content:center"><ha-icon icon="mdi:cog" style="display:block;width:24px;height:24px;--mdc-icon-size:24px"></ha-icon></button>
   </div>
 
   <div data-panel="home" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:flex;flex-direction:column;gap:14px">
