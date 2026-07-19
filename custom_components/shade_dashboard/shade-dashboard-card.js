@@ -129,6 +129,11 @@ const DEFAULT_LAYOUT = {
     west_lux: "sensor.west_light_level",
     south_lux: "sensor.south_light_level",
   },
+  lux_sensors: {
+    "l3": {"entity": "sensor.west_light_level", "name": "Living Room Lux Sensor West", "corner": "bottom-right"},
+    "u3": {"entity": "sensor.south_light_level", "name": "Living Room Lux Sensor South", "corner": "bottom-left"},
+    "uh3": {"entity": "sensor.lux_sensor_3_light_level", "name": "Upstairs Hallway Lux Sensor West", "corner": "top-right"}
+  },
   // Physics for the window sunlight (mirror of const.py SUN_GEO). Wall azimuths
   // are the walls' true-north outward normals; viewer params are the eye point
   // the projection renders from (feet). Strict JSON — test_layout_sync parses it.
@@ -184,6 +189,23 @@ const offline = (slot) =>
 const flash = (slot, clip) =>
   `<div data-flash="${slot}" class="sd-flash-ov" style="${clip ? `clip-path:url(#sd-clip-${slot})` : "border-radius:3px"}"></div>`;
 const sunUnder = (slot) => `<div data-sunlit="${slot}" style="position:absolute;inset:0;pointer-events:none"></div>`;
+export function formatLux(value, compact = false) {
+  const lux = Number(value);
+  if (!Number.isFinite(lux) || lux < 0) return "—";
+  if (lux >= 1000000) return `${compact ? Math.round(lux / 1000000) : (lux / 1000000).toFixed(1)}M`;
+  if (lux >= 1000) return `${compact ? Math.round(lux / 1000) : (lux / 1000).toFixed(1)}k`;
+  return `${Math.round(lux)}`;
+}
+export function luxContrast(glassColor, openPosition) {
+  const rgb = parseInt(String(glassColor || "").replace("#", ""), 16);
+  if (!Number.isFinite(rgb)) return "dark";
+  const luminance = (0.2126 * ((rgb >> 16) & 255) + 0.7152 * ((rgb >> 8) & 255) + 0.0722 * (rgb & 255)) / 255;
+  return openPosition > 50 && luminance < 0.42 ? "light" : "dark";
+}
+const luxReadout = (slot, compact = false) =>
+  `<div data-lux="${slot}"${compact ? " data-lux-compact" : ""} class="sd-lux" role="status" style="display:none">` +
+    `<span class="sd-lux-dot"></span><span data-lux-value="${slot}" class="sd-lux-reading"></span><span class="sd-lux-unit">LUX</span>` +
+  `</div>`;
 // Linear mix of two #RRGGBB colors (t: 0 -> a, 1 -> b), for the sky tint.
 // Returns #RRGGBB so mixes can be chained (rgb() output broke the 2nd parse).
 const hexMix = (a, b, t) => {
@@ -254,7 +276,7 @@ export function skyPalette(el) {
   };
 }
 const winRect = (slot, glass) =>
-  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}</div>`;
+  `<div data-slot="${slot}" title="${slot}" style="position:relative;width:84px;height:190px;border:3px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${sunUnder(slot)}${fabric(slot, 4, true)}${flash(slot)}${offline(slot)}${luxReadout(slot)}</div>`;
 const label = (slot) =>
   `<span data-label="${slot}" style="font:700 13px ui-monospace,Menlo,monospace;color:#6E6558;letter-spacing:.3px"></span>`;
 const lowerCol = (slot, glass = GLASS_LOWER) =>
@@ -280,7 +302,7 @@ const doorCol = (slot) =>
 // so _update/_setFabric/flash/selection all work unchanged.
 const mobileWin = (slot, glass) =>
   `<div style="display:flex;flex-direction:column;align-items:center;gap:3px">` +
-    `<div data-slot="${slot}" title="${slot}" style="position:relative;width:46px;height:64px;border:2px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 3)}${flash(slot)}${offline(slot)}</div>` +
+    `<div data-slot="${slot}" title="${slot}" style="position:relative;width:46px;height:64px;border:2px solid #1F1B17;border-radius:3px;background:${glass};overflow:hidden;cursor:pointer">${fabric(slot, 3)}${flash(slot)}${offline(slot)}${luxReadout(slot, true)}</div>` +
     `<span data-label="${slot}" style="font:700 10px ui-monospace,Menlo,monospace;color:#6E6558"></span>` +
   `</div>`;
 const mobileDoorTile = (slot) =>
@@ -306,7 +328,17 @@ const FLASH_CSS = `
   @keyframes sd-ring-pulse { 0%,100% { stroke-opacity:.95; } 50% { stroke-opacity:.12; } }
   .sd-flash-ring-on { animation: sd-ring-pulse .95s ease-in-out infinite; }
   @keyframes sd-blink { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
-  .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }`;
+  .sd-moving-label { color:${ACCENT} !important; animation: sd-blink .95s ease-in-out infinite; }
+  .sd-lux { position:absolute;z-index:8;left:50%;top:50%;transform:translate(-50%,-50%);flex-direction:column;align-items:center;gap:1px;pointer-events:none;white-space:nowrap; }
+  .sd-lux-dot { width:6px;height:6px;border-radius:50%;background:#E8B84E;box-shadow:0 0 7px 2px rgba(232,184,78,.8); }
+  .sd-lux-reading { margin-top:2px;color:#26211B;text-shadow:0 1px 2px rgba(255,253,249,.95),0 0 4px #FFFDF9;font:700 10px ui-monospace,Menlo,monospace;letter-spacing:-.3px;line-height:1; }
+  .sd-lux-unit { color:#6E6558;text-shadow:0 1px 2px #FFFDF9;font:700 5.5px ui-monospace,Menlo,monospace;letter-spacing:1.2px;line-height:1; }
+  .sd-lux[data-contrast="light"] .sd-lux-reading { color:#FFFDF9;text-shadow:0 1px 2px rgba(31,27,23,.98),0 0 5px #1F1B17; }
+  .sd-lux[data-contrast="light"] .sd-lux-unit { color:#F3EDDF;text-shadow:0 1px 2px #1F1B17,0 0 4px #1F1B17; }
+  .sd-lux[data-lux-compact] { gap:0; }
+  .sd-lux[data-lux-compact] .sd-lux-dot { width:4px;height:4px;box-shadow:0 0 5px 1.5px rgba(232,184,78,.82); }
+  .sd-lux[data-lux-compact] .sd-lux-reading { margin-top:2px;font-size:7px;letter-spacing:-.5px; }
+  .sd-lux[data-lux-compact] .sd-lux-unit { font-size:4.5px;letter-spacing:.8px; }`;
 // --- Solar position + wall projection (Sun tab & live sun dot) --------------
 // NOAA solar position algorithm (~0.1 deg). Validated against the sun2
 // integration's sensors for this house (tests/js/solar.test.mjs pins reference
@@ -1676,6 +1708,7 @@ class ShadeDashboardCard extends BaseElement {
         }
       }
     }
+    this._updateLuxSensors();
 
     // tabs
     root.querySelectorAll("[data-tab]").forEach((el) => {
@@ -1730,6 +1763,26 @@ class ShadeDashboardCard extends BaseElement {
 
     this._updateSun();
     this._updateBar();
+  }
+
+  _updateLuxSensors() {
+    const sky = skyPalette(this._sunAzEl().el);
+    for (const [slot, cfg] of Object.entries(this._layout.lux_sensors || {})) {
+      const badge = this.shadowRoot.querySelector(`[data-lux="${slot}"]`);
+      if (!badge) continue;
+      const state = this._hass.states[cfg.entity];
+      const lux = state ? Number(state.state) : NaN;
+      const available = Number.isFinite(lux) && lux >= 0;
+      const compact = badge.hasAttribute("data-lux-compact");
+      const glassColor = /^u\d/.test(slot) ? sky.high : sky.mid;
+      badge.dataset.contrast = luxContrast(glassColor, this._dispPos(slot));
+      badge.style.display = "flex";
+      badge.style.opacity = available ? "1" : ".68";
+      badge.querySelector(`[data-lux-value="${slot}"]`).textContent = formatLux(available ? lux : NaN, compact);
+      const exact = available ? `${Math.round(lux).toLocaleString()} lx` : "unavailable";
+      badge.title = `${cfg.name || cfg.entity}: ${exact}`;
+      badge.setAttribute("aria-label", badge.title);
+    }
   }
 
   _num(entity) {

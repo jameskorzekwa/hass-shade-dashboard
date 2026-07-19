@@ -157,6 +157,26 @@ SUN: dict[str, str] = {
     "south_lux": "sensor.south_light_level",
 }
 
+# --- Lux sensors mounted in individual windows -------------------------------
+# ``corner`` is the sensor's physical position as seen from inside the room.
+LUX_SENSORS: dict[str, dict[str, str]] = {
+    "l3": {
+        "entity": "sensor.west_light_level",
+        "name": "Living Room Lux Sensor West",
+        "corner": "bottom-right",
+    },
+    "u3": {
+        "entity": "sensor.south_light_level",
+        "name": "Living Room Lux Sensor South",
+        "corner": "bottom-left",
+    },
+    "uh3": {
+        "entity": "sensor.lux_sensor_3_light_level",
+        "name": "Upstairs Hallway Lux Sensor West",
+        "corner": "top-right",
+    },
+}
+
 # --- Sun light geometry -------------------------------------------------------
 # Physics for rendering real sunlight through the drawn windows (each window
 # carries light layers positioned at the sun's true location in that pane's
@@ -251,6 +271,7 @@ def build_panel_config() -> dict:
         "groups": groups,
         "scenes": SCENES,
         "sun": SUN,
+        "lux_sensors": LUX_SENSORS,
         "sun_geo": SUN_GEO,
         "toggles": TOGGLES,
         "tracked": _tracked_entities(),

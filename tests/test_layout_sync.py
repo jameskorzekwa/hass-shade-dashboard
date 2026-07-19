@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from custom_components.shade_dashboard.const import (
+    LUX_SENSORS,
     SCENES,
     SHADES,
     TOGGLES,
@@ -42,6 +43,35 @@ def test_js_shade_map_matches_const() -> None:
     expected = {slot: abstract_entity(slot) for slot in SHADES}
     assert _parse_js_shades() == expected
     assert {slot: cfg["entity"] for slot, cfg in build_panel_config()["shades"].items()} == expected
+
+
+def test_lux_sensor_map_matches_windows_and_card() -> None:
+    expected = {
+        "l3": {
+            "entity": "sensor.west_light_level",
+            "name": "Living Room Lux Sensor West",
+            "corner": "bottom-right",
+        },
+        "u3": {
+            "entity": "sensor.south_light_level",
+            "name": "Living Room Lux Sensor South",
+            "corner": "bottom-left",
+        },
+        "uh3": {
+            "entity": "sensor.lux_sensor_3_light_level",
+            "name": "Upstairs Hallway Lux Sensor West",
+            "corner": "top-right",
+        },
+    }
+    assert expected == LUX_SENSORS
+    assert build_panel_config()["lux_sensors"] == expected
+
+    import json
+
+    text = CARD_JS.read_text()
+    block = re.search(r"lux_sensors:\s*(\{.*?\n  \}),", text, re.DOTALL)
+    assert block, "could not locate the lux_sensors block in DEFAULT_LAYOUT"
+    assert json.loads(block.group(1)) == expected
 
 
 def test_offline_shade_is_lower_2() -> None:
