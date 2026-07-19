@@ -19,7 +19,7 @@ const cardPath = fileURLToPath(
 );
 const src = await readFile(cardPath);
 const cardSource = src.toString();
-const { loadDevicePreferences, loadSessionFloor, normalizeDevicePreferences, resolveSelectableFloor, skyPalette, solarPos, sunOnWall } = await import(
+const { formatLux, loadDevicePreferences, loadSessionFloor, luxContrast, normalizeDevicePreferences, resolveSelectableFloor, skyPalette, solarPos, sunOnWall } = await import(
   "data:text/javascript;base64," + src.toString("base64")
 );
 
@@ -27,6 +27,20 @@ const LAT = 39.582804;
 const LON = -105.249572;
 const close = (got, want, tol, label) =>
   assert.ok(Math.abs(got - want) <= tol, `${label}: got ${got.toFixed(2)}, want ${want} ±${tol}`);
+
+test("formats lux readings for full and compact window badges", () => {
+  assert.equal(formatLux(51566.21), "51.6k");
+  assert.equal(formatLux(9459.16), "9.5k");
+  assert.equal(formatLux(9459.16, true), "9k");
+  assert.equal(formatLux(842), "842");
+  assert.equal(formatLux("unavailable"), "—");
+});
+
+test("lux readouts adapt to night glass without changing over shade fabric", () => {
+  assert.equal(luxContrast("#1A2740", 100), "light");
+  assert.equal(luxContrast("#E9E6DB", 100), "dark");
+  assert.equal(luxContrast("#1A2740", 40), "dark");
+});
 
 test("matches the sun2 sensors at the calibration-photo evening", () => {
   // 19:53 MDT — sensors read az 293.70 / el 5.4 moments earlier
