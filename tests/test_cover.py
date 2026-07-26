@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from homeassistant.const import STATE_CLOSING
-from homeassistant.core import HomeAssistant
+from homeassistant.const import STATE_CLOSING, STATE_OPENING
+from homeassistant.core import Event, HomeAssistant, State
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.shade_dashboard.const import (
@@ -132,6 +132,48 @@ async def test_command_routes_to_source() -> None:
     assert service == "close_cover"
     assert data["entity_id"] == source
     manager.set_overridden.assert_called_once_with(cover.entity_id, True)
+
+
+async def test_untracked_close_reverses_opening_via_nudge(hass: HomeAssistant) -> None:
+    """RYSE reverses through 1% when its stale 0% position would discard close."""
+    source = SHADES["mbr1"]
+    cover = ShadeCover("mbr1", source, tracked=False)
+    cover.hass = hass
+    cover.async_write_ha_state = MagicMock()
+    manager = MagicMock()
+    manager.is_automation_context.return_value = False
+    hass.data[OVERRIDE_MANAGER_KEY] = manager
+    hass.states.async_set(source, STATE_OPENING, {"current_position": 0, "friendly_name": source})
+
+    service_call = AsyncMock()
+    with patch.object(type(hass.services), "async_call", service_call):
+        await cover.async_close_cover()
+
+        service_call.assert_awaited_once_with(
+            "cover",
+            "set_cover_position",
+            {"entity_id": source, "position": 1},
+            blocking=False,
+        )
+        manager.expect_source_move.assert_called_with(source, 1)
+
+        service_call.reset_mock()
+        old_state = hass.states.get(source)
+        new_state = State(source, "open", {"current_position": 1, "friendly_name": source})
+        hass.states.async_set(source, new_state.state, new_state.attributes)
+        await cover._source_changed(
+            Event("state_changed", {"entity_id": source, "old_state": old_state, "new_state": new_state})
+        )
+
+        service_call.assert_awaited_once_with(
+            "cover",
+            "close_cover",
+            {"entity_id": source},
+            blocking=False,
+        )
+        manager.expect_source_move.assert_called_with(source, 0)
+
+    cover._cancel_optimistic_timer()
 
 
 async def test_manual_command_and_resume_service_toggle_override(hass: HomeAssistant) -> None:
