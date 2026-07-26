@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from homeassistant.core import HomeAssistant
 
 from custom_components.shade_dashboard.const import abstract_entity
@@ -22,13 +24,26 @@ async def test_override_survives_manager_reload(hass: HomeAssistant) -> None:
     assert restored.is_overridden(entity)
 
 
-async def test_expected_move_clears_as_soon_as_it_settles(hass: HomeAssistant) -> None:
-    """A manual follow-up immediately after an automatic move is detectable."""
+async def test_expected_move_survives_sparse_position_updates(hass: HomeAssistant) -> None:
+    """A gateway pause mid-travel does not turn the next update into manual motion."""
     manager = OverrideManager(hass)
     source = "cover.source"
-    manager.expect_source_move(source)
+    with patch(
+        "custom_components.shade_dashboard.overrides.time.monotonic",
+        side_effect=[0, 1, 5, 6],
+    ):
+        manager.expect_source_move(source, 100)
+        assert manager.source_move_is_expected(source, previous=0, current=20)
+        # Four seconds with no update exceeded the old 2.5-second settle rule.
+        assert manager.source_move_is_expected(source, previous=20, current=20)
+        assert manager.source_move_is_expected(source, previous=20, current=60)
 
-    assert manager.source_move_is_expected(source, observed=True)
-    manager.settle_source_move(source)
 
-    assert not manager.source_move_is_expected(source)
+async def test_reversing_automatic_move_is_manual(hass: HomeAssistant) -> None:
+    """Motion away from the commanded target clears attribution immediately."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+
+    assert manager.source_move_is_expected(source, previous=100, current=60)
+    assert not manager.source_move_is_expected(source, previous=60, current=70)
