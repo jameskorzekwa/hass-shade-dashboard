@@ -66,6 +66,10 @@ CLAMP_HIGH = 97
 # A shade counts as having really moved (vs a startup position blip) once its
 # live position travels this far from where a command captured it.
 TRAVEL_EPS = 3
+# RYSE reports its starting endpoint for the whole trip. Its bridge ignores an
+# opposite endpoint command while that stale position already equals the target,
+# so reverse through the adjacent position and finish at the endpoint afterward.
+RYSE_ENDPOINT_NUDGE = 1
 
 
 async def async_setup_entry(
@@ -118,6 +122,7 @@ class ShadeCover(CoverEntity):
         self._optimistic: int | None = None
         self._optimistic_start: int | None = None
         self._optimistic_unsub = None  # cancels the safety-valve timer
+        self._endpoint_followup: int | None = None
 
     async def async_added_to_hass(self) -> None:
         """Resolve name/features, then follow the source cover + live events."""
@@ -172,15 +177,31 @@ class ShadeCover(CoverEntity):
         return True
 
     # --- following the underlying device -------------------------------------
-    @callback
-    def _source_changed(self, event: Event) -> None:
+    async def _source_changed(self, event: Event) -> None:
         """The real cover changed (availability, and position for untracked)."""
         if not self._meta_resolved:
             self._resolve_meta()
         self._maybe_settle_optimistic()
         if not self._tracked and self._source_moved_externally(event) and (manager := self._override_manager()):
             manager.set_overridden(self.entity_id, True)
+        await self._finish_endpoint_reversal(event)
         self.async_write_ha_state()
+
+    async def _finish_endpoint_reversal(self, event: Event) -> None:
+        """Send the real endpoint after a RYSE reversal nudge settles."""
+        target = self._endpoint_followup
+        new = event.data.get("new_state")
+        if target is None or new is None or new.state in (STATE_OPENING, STATE_CLOSING):
+            return
+        position = new.attributes.get("current_position")
+        nudge = RYSE_ENDPOINT_NUDGE if target == 0 else 100 - RYSE_ENDPOINT_NUDGE
+        if position is None or abs(int(position) - nudge) > TRAVEL_EPS:
+            return
+        self._endpoint_followup = None
+        if manager := self._override_manager():
+            manager.expect_source_move(self._source, target)
+        service = SERVICE_CLOSE_COVER if target == 0 else SERVICE_OPEN_COVER
+        await self.hass.services.async_call("cover", service, {"entity_id": self._source}, blocking=False)
 
     def _source_moved_externally(self, event: Event) -> bool:
         """Detect a hardware/app move of an untracked source cover."""
@@ -387,8 +408,12 @@ class ShadeCover(CoverEntity):
         """Route a movement to the real device, holding position until it moves."""
         if self._blocked_by_calibration():
             return
+        if self._endpoint_followup == target:
+            return
+        self._endpoint_followup = None
         self._mark_manual_override()
-        if manager := self._override_manager():
+        manager = self._override_manager()
+        if manager is not None:
             manager.expect_source_move(self._source, target)
         # For tracked shades with no live reading yet (only right after a
         # restart), hold the pre-command position so we don't briefly show the
@@ -415,11 +440,25 @@ class ShadeCover(CoverEntity):
             self._optimistic_unsub = async_call_later(self.hass, 120, _expire)
         # Endpoints via open/close (the gateway reports the real ramp); an exact
         # position via set_position (gateway reports the target ~immediately).
-        if target >= 100:
+        source = self.hass.states.get(self._source)
+        source_position = self._source_position()
+        if not self._tracked and target <= 0 and source_position == 0 and source and source.state == STATE_OPENING:
+            self._endpoint_followup = 0
+            service = SERVICE_SET_COVER_POSITION
+            data = {"entity_id": self._source, ATTR_POSITION: RYSE_ENDPOINT_NUDGE}
+        elif (
+            not self._tracked and target >= 100 and source_position == 100 and source and source.state == STATE_CLOSING
+        ):
+            self._endpoint_followup = 100
+            service = SERVICE_SET_COVER_POSITION
+            data = {"entity_id": self._source, ATTR_POSITION: 100 - RYSE_ENDPOINT_NUDGE}
+        elif target >= 100:
             service, data = SERVICE_OPEN_COVER, {"entity_id": self._source}
         elif target <= 0:
             service, data = SERVICE_CLOSE_COVER, {"entity_id": self._source}
         else:
             service = SERVICE_SET_COVER_POSITION
             data = {"entity_id": self._source, ATTR_POSITION: target}
+        if self._endpoint_followup is not None and manager is not None:
+            manager.expect_source_move(self._source, data[ATTR_POSITION])
         await self.hass.services.async_call("cover", service, data, blocking=False)
