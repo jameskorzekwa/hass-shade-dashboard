@@ -33,6 +33,7 @@ from .const import (
     GATEWAY_ROOM_SLOT,
     LIVE_EVENT,
     MOVE_FAILED_EVENT,
+    OVERRIDE_MANAGER_KEY,
     SHADES,
 )
 
@@ -161,7 +162,12 @@ class GatewayTracker:
 
     async def async_move_group(self, source_entities: list[str], primary: float) -> bool:
         """Fire-and-forget synced move for a group (no verification)."""
-        ids = [g for e, g in self._movable_ids(source_entities).items()]
+        movable = self._movable_ids(source_entities)
+        manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
+        if manager is not None:
+            for entity in movable:
+                manager.expect_source_move(entity)
+        ids = list(movable.values())
         return await self._put_positions(ids, primary)
 
     async def _read_positions(self, ids) -> dict[int, int]:
@@ -220,6 +226,10 @@ class GatewayTracker:
             return []
         target = round(max(0.0, min(1.0, primary)) * 100)
         for _attempt in range(retries + 1):
+            manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
+            if manager is not None:
+                for entity in pending:
+                    manager.expect_source_move(entity)
             await self._put_positions(list(pending.values()), primary)
             final = await self._wait_settled(list(pending.values()), target)
             pending = {e: g for e, g in pending.items() if abs(final.get(g, -999) - target) > MOVE_TOLERANCE}
@@ -275,6 +285,8 @@ class GatewayTracker:
             return False
         # Lock BEFORE sending so a command racing in right after is blocked.
         self._set_calibrating(entity_id, CALIBRATE_LOCK)
+        if manager := self.hass.data.get(OVERRIDE_MANAGER_KEY):
+            manager.expect_source_move(entity_id, CALIBRATE_LOCK + 15)
         try:
             # bleName contains a ':' — build the URL directly to avoid re-encoding.
             url = f"http://{self._host}/home/shades/exec?shades={ble}"
@@ -335,8 +347,13 @@ class GatewayTracker:
             prev = self._prev_pos.get(entity)
             if prev is not None and prev != value:
                 self._last_change[entity] = now
+                manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
+                if manager is not None and not manager.source_move_is_expected(entity, observed=True):
+                    manager.set_source_overridden(entity)
             if now - self._last_change.get(entity, 0.0) < MOVE_HOLD:
                 moving.append(entity)
+            elif manager := self.hass.data.get(OVERRIDE_MANAGER_KEY):
+                manager.settle_source_move(entity)
             # sparse position history (dedupe unchanged) for drift detection
             hist = self._reach.setdefault(entity, [])
             if not hist or hist[-1][1] != value:

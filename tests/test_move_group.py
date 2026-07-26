@@ -5,13 +5,14 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.shade_dashboard import _async_move_group
 from custom_components.shade_dashboard.const import (
     DOMAIN,
     MOVE_FAILED_EVENT,
+    OVERRIDE_MANAGER_KEY,
     SHADES,
     TRACKER_KEY,
     abstract_entity,
@@ -197,6 +198,69 @@ async def test_move_group_service_verify_routes_to_verified() -> None:
     await _async_move_group(hass, call)
     tracker.async_move_group_verified.assert_awaited_once()
     tracker.async_move_group.assert_not_awaited()
+
+
+async def test_automatic_move_skips_overridden_shade() -> None:
+    """Automation mode filters overridden members before issuing the group move."""
+    hass = MagicMock()
+    tracker = MagicMock()
+    tracker.has_gateway_id.return_value = True
+    tracker.async_move_group_verified = AsyncMock()
+    overrides = MagicMock()
+    overrides.is_overridden.side_effect = lambda entity: entity == abstract_entity("ko1")
+    hass.data = {TRACKER_KEY: tracker, OVERRIDE_MANAGER_KEY: overrides}
+    call = MagicMock()
+    call.context = Context()
+    call.data = {
+        "entity_id": [abstract_entity("ko1"), abstract_entity("ko2")],
+        "position": 0,
+        "verify": True,
+        "respect_overrides": True,
+    }
+
+    await _async_move_group(hass, call)
+
+    sources = tracker.async_move_group_verified.await_args.args[0]
+    assert sources == [SHADES["ko2"]]
+    overrides.mark_automation_context.assert_called_once_with(call.context)
+    overrides.set_overridden.assert_not_called()
+
+
+async def test_manual_group_move_sets_each_override() -> None:
+    """Dashboard group controls count as manual moves for every member."""
+    hass = MagicMock()
+    tracker = MagicMock()
+    tracker.has_gateway_id.return_value = True
+    tracker.async_move_group = AsyncMock()
+    overrides = MagicMock()
+    hass.data = {TRACKER_KEY: tracker, OVERRIDE_MANAGER_KEY: overrides}
+    call = MagicMock()
+    call.context = Context()
+    entities = [abstract_entity("ko1"), abstract_entity("ko2")]
+    call.data = {"entity_id": entities, "position": 100}
+
+    await _async_move_group(hass, call)
+
+    assert [item.args for item in overrides.set_overridden.call_args_list] == [
+        (abstract_entity("ko1"), True),
+        (abstract_entity("ko2"), True),
+    ]
+
+
+async def test_gateway_hardware_move_sets_override() -> None:
+    """A PowerView position change with no expected command is manual."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a"}
+    tracker._prev_pos = {"cover.a": 100}
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.8}}])
+    tracker._maybe_check_calibration = AsyncMock()
+    overrides = MagicMock()
+    overrides.source_move_is_expected.return_value = False
+    tracker.hass.data = {OVERRIDE_MANAGER_KEY: overrides}
+
+    await tracker._poll_once()
+
+    overrides.set_source_overridden.assert_called_once_with("cover.a")
 
 
 def test_group_entities_resolution() -> None:

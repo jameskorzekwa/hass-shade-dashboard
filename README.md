@@ -7,8 +7,8 @@ control maps to which physical shade.
 
 It ships a single hand-written Lovelace card and registers it two ways: as a
 `shade-dashboard-card` you can drop on any view, **and** as a dedicated **"Shades"
-panel** in the sidebar. The card drives the existing PowerView `cover.*` entities
-through core cover services — this integration creates no entities of its own.
+panel** in the sidebar. The integration fronts the existing PowerView and RYSE
+covers with unified `cover.shade_*` entities for live tracking and control.
 
 ![design: option 1a — Wall Panel]
 
@@ -23,6 +23,9 @@ through core cover services — this integration creates no entities of its own.
   `current_position` from HA and animates (0.45s) on any change.
 - **Per-shade control** — tap any window to select it; a control bar slides up
   with a 0–100% slider and Open/Close.
+- **Persistent manual overrides** — moving one shade manually excludes only that
+  shade from automatic group moves until **Resume automation** is pressed in its
+  control bar. Dashboard commands and hardware/app moves are both detected.
 - **Group controls** — per-wall `▲▼` chips and per-floor Open/Close (unavailable
   shades are skipped).
 - **Scenes** — Movie Mode (wired to `script.movie_mode`); Sunset / Open All /
@@ -57,4 +60,3 @@ Edit there and redeploy the card to re-wire.
 Standards mirror the other integrations in this account: tests + ruff + CI +
 auto-release-on-merge. Every merge to `main` that passes CI cuts a `vX.Y.Z`
 release automatically.
-

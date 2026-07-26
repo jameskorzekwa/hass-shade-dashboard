@@ -11,6 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.shade_dashboard.const import (
     DOMAIN,
     LIVE_EVENT,
+    OVERRIDE_MANAGER_KEY,
     SHADES,
     TRACKER_KEY,
     _tracked_entities,
@@ -117,7 +118,9 @@ async def test_command_routes_to_source() -> None:
     slot = next(s for s, e in SHADES.items() if e == source)
     cover = ShadeCover(slot, source, tracked=True)
     cover.hass = MagicMock()
-    cover.hass.data = {}  # no tracker -> not calibrating
+    manager = MagicMock()
+    manager.is_automation_context.return_value = False
+    cover.hass.data = {OVERRIDE_MANAGER_KEY: manager}
     cover.hass.services.async_call = AsyncMock()
     cover._live = 50  # have a live reading, so no pre-command hold/state write
 
@@ -128,6 +131,33 @@ async def test_command_routes_to_source() -> None:
     assert domain == "cover"
     assert service == "close_cover"
     assert data["entity_id"] == source
+    manager.set_overridden.assert_called_once_with(cover.entity_id, True)
+
+
+async def test_manual_command_and_resume_service_toggle_override(hass: HomeAssistant) -> None:
+    """A direct shade command persists an override until the clear service runs."""
+    await _setup(hass)
+    entity = abstract_entity("ko1")
+
+    await hass.services.async_call("cover", "close_cover", {"entity_id": entity}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity).attributes["automation_override"] is True
+
+    await hass.services.async_call(DOMAIN, "clear_override", {"entity_id": entity}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity).attributes["automation_override"] is False
+
+
+async def test_untracked_hardware_move_sets_override(hass: HomeAssistant) -> None:
+    """A RYSE movement not issued by this integration is treated as manual."""
+    await _setup(hass)
+    source = SHADES["mbr1"]
+    entity = abstract_entity("mbr1")
+
+    hass.states.async_set(source, STATE_CLOSING, {"current_position": 100, "friendly_name": source})
+    await hass.async_block_till_done()
+
+    assert hass.states.get(entity).attributes["automation_override"] is True
 
 
 async def test_untracked_optimistic_target_during_travel(hass: HomeAssistant) -> None:

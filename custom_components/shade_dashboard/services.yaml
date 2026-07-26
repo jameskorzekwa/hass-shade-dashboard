@@ -9,6 +9,14 @@ recalibrate:
       integration: shade_dashboard
       domain: cover
 
+clear_override:
+  name: Resume shade automation
+  description: Clear a shade's persistent manual override so automatic group moves include it again.
+  target:
+    entity:
+      integration: shade_dashboard
+      domain: cover
+
 move_group:
   name: Move a group of shades in sync
   description: >-
@@ -52,6 +60,13 @@ move_group:
         Confirm the shades actually reached the target; re-drive any that didn't
         (one retry) and raise a notification if they still fail. Use for
         automations; the dashboard leaves this off for instant feedback.
+      required: false
+      default: false
+      selector:
+        boolean:
+    respect_overrides:
+      name: Respect manual overrides
+      description: Skip shades that have a persistent manual override. Enable this for automations.
       required: false
       default: false
       selector:

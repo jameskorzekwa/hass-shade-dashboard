@@ -47,6 +47,8 @@ from .const import (
     CALIBRATING_EVENT,
     DOMAIN,
     LIVE_EVENT,
+    OVERRIDE_EVENT,
+    OVERRIDE_MANAGER_KEY,
     SHADES,
     TRACKER_KEY,
     _tracked_entities,
@@ -55,6 +57,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_RECALIBRATE = "recalibrate"
+SERVICE_CLEAR_OVERRIDE = "clear_override"
 
 # Gateway calibration: a fully-closed shade reads ~2-3 and fully-open ~97-98, so
 # snap those to clean 0/100 at rest (matches the card's old _clampLive).
@@ -75,6 +78,9 @@ async def async_setup_entry(
     async_add_entities(ShadeCover(slot, source, source in tracked) for slot, source in SHADES.items())
     entity_platform.async_get_current_platform().async_register_entity_service(
         SERVICE_RECALIBRATE, {}, "async_recalibrate"
+    )
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        SERVICE_CLEAR_OVERRIDE, {}, "async_clear_override"
     )
 
 
@@ -118,9 +124,16 @@ class ShadeCover(CoverEntity):
         self._resolve_meta()
         self.async_on_remove(self._cancel_optimistic_timer)
         self.async_on_remove(async_track_state_change_event(self.hass, [self._source], self._source_changed))
+        self.async_on_remove(self.hass.bus.async_listen(OVERRIDE_EVENT, self._override_event))
         if self._tracked:
             self.async_on_remove(self.hass.bus.async_listen(LIVE_EVENT, self._live_event))
             self.async_on_remove(self.hass.bus.async_listen(CALIBRATING_EVENT, self._calibrating_event))
+
+    @callback
+    def _override_event(self, event: Event) -> None:
+        """Refresh when this shade's automation override changes."""
+        if event.data.get("entity_id") == self.entity_id:
+            self.async_write_ha_state()
 
     @callback
     def _calibrating_event(self, event: Event) -> None:
@@ -165,7 +178,28 @@ class ShadeCover(CoverEntity):
         if not self._meta_resolved:
             self._resolve_meta()
         self._maybe_settle_optimistic()
+        if not self._tracked and self._source_moved_externally(event) and (manager := self._override_manager()):
+            manager.set_overridden(self.entity_id, True)
         self.async_write_ha_state()
+
+    def _source_moved_externally(self, event: Event) -> bool:
+        """Detect a hardware/app move of an untracked source cover."""
+        old = event.data.get("old_state")
+        new = event.data.get("new_state")
+        if old is None or new is None:
+            return False
+        old_pos = old.attributes.get("current_position")
+        new_pos = new.attributes.get("current_position")
+        if old_pos is None or new_pos is None:
+            return False
+        moved = new.state in (STATE_OPENING, STATE_CLOSING) or abs(int(new_pos) - int(old_pos)) > 1
+        manager = self._override_manager()
+        if not moved or manager is None:
+            return False
+        expected = manager.source_move_is_expected(self._source, observed=True)
+        if expected and new.state not in (STATE_OPENING, STATE_CLOSING):
+            manager.settle_source_move(self._source)
+        return not expected
 
     def _maybe_settle_optimistic(self) -> None:
         """Drop the optimistic target once the real device has settled.
@@ -254,8 +288,13 @@ class ShadeCover(CoverEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Expose whether the shade is locked mid-calibration (for the card)."""
-        return {"calibrating": self._is_calibrating()}
+        """Expose calibration and automation state for the dashboard."""
+        return {
+            "calibrating": self._is_calibrating(),
+            "automation_override": bool(
+                (manager := self._override_manager()) and manager.is_overridden(self.entity_id)
+            ),
+        }
 
     def _tracked_direction(self) -> str | None:
         """Infer travel direction from the last two live readings."""
@@ -299,6 +338,9 @@ class ShadeCover(CoverEntity):
         """Stop the real cover."""
         if self._blocked_by_calibration():
             return
+        self._mark_manual_override()
+        if manager := self._override_manager():
+            manager.expect_source_move(self._source)
         await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
 
     def _blocked_by_calibration(self) -> bool:
@@ -324,10 +366,28 @@ class ShadeCover(CoverEntity):
             return
         await tracker.async_recalibrate(self._source)
 
+    async def async_clear_override(self) -> None:
+        """Return this shade to automatic group moves."""
+        if manager := self._override_manager():
+            manager.set_overridden(self.entity_id, False)
+
+    def _override_manager(self):
+        """Return the process-global override manager."""
+        return self.hass.data.get(OVERRIDE_MANAGER_KEY)
+
+    def _mark_manual_override(self) -> None:
+        """Set an override unless this command came from automatic move_group."""
+        manager = self._override_manager()
+        if manager is not None and not manager.is_automation_context(self._context):
+            manager.set_overridden(self.entity_id, True)
+
     async def _command(self, target: int) -> None:
         """Route a movement to the real device, holding position until it moves."""
         if self._blocked_by_calibration():
             return
+        self._mark_manual_override()
+        if manager := self._override_manager():
+            manager.expect_source_move(self._source)
         # For tracked shades with no live reading yet (only right after a
         # restart), hold the pre-command position so we don't briefly show the
         # source cover's optimistic jump.
