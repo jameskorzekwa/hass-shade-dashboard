@@ -46,6 +46,8 @@ ERROR_DELAY = 8.0
 # briefly see no change mid-travel. Treat a shade as still moving for this long
 # after its last position change so tracking doesn't flap on/off.
 MOVE_HOLD = 2.5
+# Ignore a one-percent endpoint wobble when no command is in flight.
+MANUAL_MOVE_EPS = 1
 
 # --- Calibration-drift detection --------------------------------------------
 # A shade with collapsed travel limits reports a tiny position range (e.g. lrh1
@@ -166,7 +168,7 @@ class GatewayTracker:
         manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
         if manager is not None:
             for entity in movable:
-                manager.expect_source_move(entity)
+                manager.expect_source_move(entity, round(primary * 100))
         ids = list(movable.values())
         return await self._put_positions(ids, primary)
 
@@ -229,7 +231,7 @@ class GatewayTracker:
             manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
             if manager is not None:
                 for entity in pending:
-                    manager.expect_source_move(entity)
+                    manager.expect_source_move(entity, target)
             await self._put_positions(list(pending.values()), primary)
             final = await self._wait_settled(list(pending.values()), target)
             pending = {e: g for e, g in pending.items() if abs(final.get(g, -999) - target) > MOVE_TOLERANCE}
@@ -286,7 +288,7 @@ class GatewayTracker:
         # Lock BEFORE sending so a command racing in right after is blocked.
         self._set_calibrating(entity_id, CALIBRATE_LOCK)
         if manager := self.hass.data.get(OVERRIDE_MANAGER_KEY):
-            manager.expect_source_move(entity_id, CALIBRATE_LOCK + 15)
+            manager.expect_source_move(entity_id, seconds=CALIBRATE_LOCK + 15)
         try:
             # bleName contains a ':' — build the URL directly to avoid re-encoding.
             url = f"http://{self._host}/home/shades/exec?shades={ble}"
@@ -345,15 +347,21 @@ class GatewayTracker:
             # velocity/motion are unreliable (usually 0/None even mid-travel), so
             # motion = "position changed within the last MOVE_HOLD seconds".
             prev = self._prev_pos.get(entity)
+            manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
+            expected = bool(
+                manager
+                and manager.source_move_is_expected(
+                    entity,
+                    previous=prev,
+                    current=value,
+                )
+            )
             if prev is not None and prev != value:
                 self._last_change[entity] = now
-                manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
-                if manager is not None and not manager.source_move_is_expected(entity, observed=True):
+                if manager is not None and abs(value - prev) > MANUAL_MOVE_EPS and not expected:
                     manager.set_source_overridden(entity)
             if now - self._last_change.get(entity, 0.0) < MOVE_HOLD:
                 moving.append(entity)
-            elif manager := self.hass.data.get(OVERRIDE_MANAGER_KEY):
-                manager.settle_source_move(entity)
             # sparse position history (dedupe unchanged) for drift detection
             hist = self._reach.setdefault(entity, [])
             if not hist or hist[-1][1] != value:

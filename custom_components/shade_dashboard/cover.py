@@ -196,9 +196,11 @@ class ShadeCover(CoverEntity):
         manager = self._override_manager()
         if not moved or manager is None:
             return False
-        expected = manager.source_move_is_expected(self._source, observed=True)
-        if expected and new.state not in (STATE_OPENING, STATE_CLOSING):
-            manager.settle_source_move(self._source)
+        expected = manager.source_move_is_expected(
+            self._source,
+            previous=int(old_pos),
+            current=int(new_pos),
+        )
         return not expected
 
     def _maybe_settle_optimistic(self) -> None:
@@ -387,7 +389,7 @@ class ShadeCover(CoverEntity):
             return
         self._mark_manual_override()
         if manager := self._override_manager():
-            manager.expect_source_move(self._source)
+            manager.expect_source_move(self._source, target)
         # For tracked shades with no live reading yet (only right after a
         # restart), hold the pre-command position so we don't briefly show the
         # source cover's optimistic jump.
