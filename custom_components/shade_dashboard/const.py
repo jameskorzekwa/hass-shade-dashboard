@@ -35,6 +35,10 @@ LIVE_EVENT = "shade_dashboard_live_position"
 
 # hass.data key for the process-global gateway tracker.
 TRACKER_KEY = f"{DOMAIN}_tracker"
+# hass.data key for persistent per-shade automation overrides.
+OVERRIDE_MANAGER_KEY = f"{DOMAIN}_override_manager"
+# Fired when one override changes so its cover entity can refresh immediately.
+OVERRIDE_EVENT = "shade_dashboard_override_changed"
 
 # Recalibrate a shade via the gateway's generic BLE relay: POST
 # /home/shades/exec?shades=<bleName> with this frame (sid 0xF7 motion service,

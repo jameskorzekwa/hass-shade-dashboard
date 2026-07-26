@@ -20,8 +20,16 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, TRACKER_KEY, build_panel_config, group_entities, source_for_abstract
+from .const import (
+    DOMAIN,
+    OVERRIDE_MANAGER_KEY,
+    TRACKER_KEY,
+    build_panel_config,
+    group_entities,
+    source_for_abstract,
+)
 from .gateway import GatewayTracker
+from .overrides import OverrideManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +48,9 @@ MOVE_GROUP_SCHEMA = vol.Schema(
             # verify=true confirms arrival + retries stragglers + notifies on failure
             # (for automations); the dashboard leaves it off for instant feedback.
             vol.Optional("verify", default=False): cv.boolean,
+            # Automatic calls skip persistent per-shade manual overrides. The
+            # dashboard leaves this false, so its group controls are manual.
+            vol.Optional("respect_overrides", default=False): cv.boolean,
         },
         cv.has_at_least_one_key("entity_id", "group"),
     )
@@ -62,6 +73,15 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
         entities += resolved
     position = call.data["position"]
     verify = call.data.get("verify", False)
+    respect_overrides = call.data.get("respect_overrides", False)
+    overrides: OverrideManager | None = hass.data.get(OVERRIDE_MANAGER_KEY)
+    if overrides is not None:
+        if respect_overrides:
+            entities = [entity for entity in entities if not overrides.is_overridden(entity)]
+            overrides.mark_automation_context(call.context)
+        else:
+            for entity in entities:
+                overrides.set_overridden(entity, True)
     tracker = hass.data.get(TRACKER_KEY)
     tracked_sources: list[str] = []
     untracked: list[str] = []
@@ -78,7 +98,11 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
             await tracker.async_move_group(tracked_sources, position / 100)
     for entity in untracked:
         await hass.services.async_call(
-            "cover", "set_cover_position", {"entity_id": entity, "position": position}, blocking=False
+            "cover",
+            "set_cover_position",
+            {"entity_id": entity, "position": position},
+            blocking=False,
+            context=call.context,
         )
 
 
@@ -130,6 +154,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Live position tracking: poll the PowerView gateway and fire live-position
     # events the card follows during motion. Process-global (one poller).
     if TRACKER_KEY not in hass.data:
+        overrides = OverrideManager(hass)
+        await overrides.async_load()
+        hass.data[OVERRIDE_MANAGER_KEY] = overrides
         tracker = GatewayTracker(hass)
         hass.data[TRACKER_KEY] = tracker
         await tracker.start()

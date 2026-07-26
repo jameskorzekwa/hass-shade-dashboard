@@ -1420,7 +1420,7 @@ class ShadeDashboardCard extends BaseElement {
 
     <div data-bar style="position:absolute;left:22px;right:22px;bottom:16px;display:none;align-items:center;gap:14px;padding:12px 16px;background:#26211B;color:#F5F1EA;border-radius:14px;box-shadow:0 10px 30px rgba(30,25,18,.3)">
       <button data-bar-close style="width:26px;height:26px;border-radius:50%;border:none;background:rgba(255,255,255,.12);color:#F5F1EA;cursor:pointer;flex-shrink:0">✕</button>
-      <div style="min-width:200px"><div data-bar-name style="font-weight:600;font-size:14px"></div><div data-bar-sub style="font-size:11px;color:#B8AF9F"></div></div>
+      <div style="min-width:200px"><div data-bar-name style="font-weight:600;font-size:14px"></div><div data-bar-sub style="font-size:11px;color:#B8AF9F"></div><button data-bar-resume style="display:none;margin-top:6px;padding:5px 9px;border-radius:7px;border:1px solid rgba(255,255,255,.3);background:transparent;color:#F5F1EA;cursor:pointer;font-weight:600;font-size:11px">Resume automation</button></div>
       <div data-bar-ctl style="display:flex;align-items:center;gap:12px;flex:1">
         <input data-bar-slider type="range" min="0" max="100" value="0" style="flex:1">
         <span data-bar-pct style="font:600 13px ui-monospace,Menlo,monospace;min-width:62px;text-align:right"></span>
@@ -1498,6 +1498,7 @@ class ShadeDashboardCard extends BaseElement {
       <input data-bar-slider type="range" min="0" max="100" value="0" style="flex:1 1 100%">
       <button data-bar-action="close" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#F5F1EA;font-weight:600;font-size:13px;cursor:pointer">Close</button>
       <button data-bar-action="open" style="flex:1;padding:12px;border-radius:10px;border:none;background:${ACCENT};color:#FFF;font-weight:600;font-size:13px;cursor:pointer">Open</button>
+      <button data-bar-resume style="display:none;flex:1 1 100%;padding:11px;border-radius:10px;border:1px solid rgba(255,255,255,.3);background:transparent;color:#F5F1EA;font-weight:600;font-size:13px;cursor:pointer">Resume automation</button>
       <button data-bar-recal title="Re-teach this shade's travel limits" style="display:none;flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#B8AF9F;font-weight:600;font-size:13px;cursor:pointer">Recalibrate</button>
     </div>
     <div data-bar-unavail style="display:none;font-size:12px;color:#E4B7A0">Unavailable in Home Assistant — check shade power or the PowerView gateway.</div>
@@ -1550,6 +1551,7 @@ class ShadeDashboardCard extends BaseElement {
     });
     root.querySelector('[data-bar-action="open"]').addEventListener("click", () => this._commandSelected("open_cover", 100));
     root.querySelector('[data-bar-action="close"]').addEventListener("click", () => this._commandSelected("close_cover", 0));
+    root.querySelector("[data-bar-resume]").addEventListener("click", () => this._resumeSelected());
     root.querySelector("[data-bar-recal]").addEventListener("click", () => this._recalSelected());
   }
 
@@ -1563,6 +1565,10 @@ class ShadeDashboardCard extends BaseElement {
     this._mark(this._entity(this._selected), target);
     this._callCover(service, this._entity(this._selected));
     this._update();
+  }
+  _resumeSelected() {
+    if (!this._selected || !this._hass) return;
+    this._hass.callService("shade_dashboard", "clear_override", { entity_id: this._entity(this._selected) });
   }
   // Recalibrate re-teaches the shade's limits and drives it to both hard stops
   // (~1 min), so it takes two taps: the first arms a 4s confirm.
@@ -1674,6 +1680,7 @@ class ShadeDashboardCard extends BaseElement {
       const fl = root.querySelector(`[data-flash="${slot}"]`);
       const lab = root.querySelector(`[data-label="${slot}"]`);
       const selected = this._selected === slot;
+      const overridden = this._overridden(slot);
       const flashRing = win ? win.querySelectorAll("[data-flash-ring]") : []; // angled: SVG motion ring
       if (win) {
         const rings = win.querySelectorAll("[data-ring]"); // angled windows draw the selection ring in SVG
@@ -1704,7 +1711,8 @@ class ShadeDashboardCard extends BaseElement {
         } else {
           // Open/Closed at the extremes, closed % in between; target while moving.
           lab.textContent = this._posLabel(100 - this._dispPos(slot));
-          if (!moving) lab.style.color = "#6E6558";
+          if (!moving) lab.style.color = overridden ? ACCENT : "#6E6558";
+          lab.title = overridden ? "Manual override: automation paused for this shade" : "";
         }
       }
     }
@@ -1742,15 +1750,16 @@ class ShadeDashboardCard extends BaseElement {
 
     // summary
     const slots = Object.keys(this._layout.shades);
-    let open = 0, avail = 0, offlineN = 0;
+    let open = 0, avail = 0, offlineN = 0, overriddenN = 0;
     for (const slot of slots) {
       const st = this._stateObj(slot);
       if (!st || st.state === "unavailable") { offlineN++; continue; }
       avail++;
       if (this._dispPos(slot) > 0) open++;
+      if (this._overridden(slot)) overriddenN++;
     }
     const sEl = root.querySelector("[data-summary]");
-    if (sEl) sEl.textContent = `${open} of ${avail} shades open${offlineN ? ` · ${offlineN} offline` : ""}`;
+    if (sEl) sEl.textContent = `${open} of ${avail} shades open${overriddenN ? ` · ${overriddenN} manual` : ""}${offlineN ? ` · ${offlineN} offline` : ""}`;
 
     // While any shade is calibrating, disable bulk buttons (a scene would move
     // the calibrating shade, which we can't exclude from a gateway scene).
@@ -1913,7 +1922,9 @@ class ShadeDashboardCard extends BaseElement {
       : st && st.state === "closing" ? "Closing…"
       : "Moving…"; // just tapped, before the cover reports a direction
     const calibrating = !unavailable && this._calibrating(slot);
-    root.querySelector("[data-bar-sub]").textContent = calibrating ? "Calibrating… controls locked" : moving ? dirWord : meta.sub || "";
+    const overridden = !unavailable && this._overridden(slot);
+    root.querySelector("[data-bar-sub]").textContent = calibrating ? "Calibrating… controls locked" : moving ? dirWord : overridden ? "Manual override · automation paused" : meta.sub || "";
+    root.querySelector("[data-bar-resume]").style.display = overridden ? "" : "none";
     root.querySelector("[data-bar-ctl]").style.display = unavailable ? "none" : "flex";
     root.querySelector("[data-bar-unavail]").style.display = unavailable ? "block" : "none";
     const pctEl = root.querySelector("[data-bar-pct]");
@@ -1950,6 +1961,10 @@ class ShadeDashboardCard extends BaseElement {
   _calibrating(slot) {
     const st = this._stateObj(slot);
     return !!(st && st.attributes && st.attributes.calibrating);
+  }
+  _overridden(slot) {
+    const st = this._stateObj(slot);
+    return !!(st && st.attributes && st.attributes.automation_override);
   }
   _anyCalibrating() {
     return Object.keys(this._layout.shades).some((s) => this._calibrating(s));
