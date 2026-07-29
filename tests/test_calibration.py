@@ -64,7 +64,9 @@ async def test_recalibrate_unknown_entity() -> None:
 async def test_drift_detection_flags_and_recalibrates_the_outlier() -> None:
     """A shade that never opens while the fleet does is auto-recalibrated."""
     t = _tracker()
-    now = 1_000_000.0
+    # A fresh HA process has less uptime than the cooldown; no previous
+    # recalibration must not be mistaken for one at monotonic timestamp zero.
+    now = 3600.0
     fleet = {f"cover.s{i}": 100 for i in range(4)}  # opened fully
     fleet["cover.stuck"] = 4  # collapsed range
     t._reach = {e: [(now, v)] for e, v in fleet.items()}

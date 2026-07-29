@@ -171,6 +171,51 @@ async def test_verified_move_persistent_failure_notifies() -> None:
     t.hass.services.async_call.assert_awaited()  # persistent_notification
 
 
+async def test_single_verified_failure_starts_recalibration() -> None:
+    """One endpoint failure after retry starts a rate-limited recalibration."""
+    t = _verify_tracker()
+    t._entity_to_id = {"cover.a": 1}
+    t._wait_settled = AsyncMock(side_effect=[{1: 40}, {1: 40}])
+    t.async_recalibrate = AsyncMock(return_value=True)
+
+    with patch("custom_components.shade_dashboard.gateway.time.monotonic", return_value=3600.0):
+        failed = await t.async_move_group_verified(["cover.a"], 1.0)
+
+    assert failed == ["cover.a"]
+    t.async_recalibrate.assert_awaited_once_with("cover.a")
+    message = t.hass.services.async_call.await_args.args[2]["message"]
+    assert "Automatic recalibration was started" in message
+
+
+async def test_failed_move_recalibration_honors_cooldown() -> None:
+    """Repeated failures cannot recalibrate the same shade inside the cooldown."""
+    t = _verify_tracker()
+    t._entity_to_id = {"cover.a": 1}
+    t._last_recal = {"cover.a": 3500.0}
+    t._wait_settled = AsyncMock(side_effect=[{1: 40}, {1: 40}])
+    t.async_recalibrate = AsyncMock(return_value=True)
+
+    with patch("custom_components.shade_dashboard.gateway.time.monotonic", return_value=3600.0):
+        await t.async_move_group_verified(["cover.a"], 1.0)
+
+    t.async_recalibrate.assert_not_awaited()
+    message = t.hass.services.async_call.await_args.args[2]["message"]
+    assert "recalibrated recently" in message
+
+
+async def test_multiple_verified_failures_do_not_recalibrate() -> None:
+    """A likely gateway-wide failure never starts multiple calibrations."""
+    t = _verify_tracker()
+    t._wait_settled = AsyncMock(side_effect=[{1: 40, 2: 40}, {1: 40, 2: 40}])
+    t.async_recalibrate = AsyncMock(return_value=True)
+
+    await t.async_move_group_verified(["cover.a", "cover.b"], 1.0)
+
+    t.async_recalibrate.assert_not_awaited()
+    message = t.hass.services.async_call.await_args.args[2]["message"]
+    assert "Multiple shades failed together" in message
+
+
 async def test_verified_move_skips_unavailable_members() -> None:
     """An unavailable (offline) shade is left out of the move entirely."""
     t = _tracker()

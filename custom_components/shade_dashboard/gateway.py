@@ -243,17 +243,35 @@ class GatewayTracker:
         return failed
 
     async def _notify_move_failure(self, entities: list[str], target: int) -> None:
-        """Event + persistent notification for shades that never reached target."""
+        """Notify and safely recalibrate one shade that failed after a retry."""
         self.hass.bus.async_fire(MOVE_FAILED_EVENT, {"entities": entities, "target": target})
         names = ", ".join(self._friendly(e) for e in entities)
         _LOGGER.warning("Shades did not reach %d%% after retry: %s", target, names)
+        recovery = ""
+        if len(entities) == 1 and target in (0, 100):
+            entity = entities[0]
+            now = time.monotonic()
+            if not self._auto_recalibrate_enabled():
+                recovery = " Auto-recalibrate is off; recalibrate it manually."
+            elif not self._recalibration_due(entity, now):
+                recovery = " It was recalibrated recently, so another calibration was not started."
+            else:
+                self._last_recal[entity] = now
+                started = await self.async_recalibrate(entity)
+                recovery = (
+                    " Automatic recalibration was started."
+                    if started
+                    else " Automatic recalibration could not be started."
+                )
+        elif len(entities) > 1:
+            recovery = " Multiple shades failed together, so automatic recalibration was not started."
         with contextlib.suppress(Exception):
             await self.hass.services.async_call(
                 "persistent_notification",
                 "create",
                 {
                     "title": "Shades didn't respond",
-                    "message": f"After a retry, these shades didn't reach {target}% open: {names}. They may need attention.",
+                    "message": f"After a retry, these shades didn't reach {target}% open: {names}.{recovery}",
                     "notification_id": "shade_move_failed",
                 },
                 blocking=False,
@@ -400,7 +418,7 @@ class GatewayTracker:
                 continue  # got at least halfway open -> fine
             if now - self._last_change.get(entity, 0.0) > CAL_WINDOW:
                 continue  # hasn't actually moved -> not a stuck-range case (or unused)
-            if now - self._last_recal.get(entity, 0.0) < CAL_RECAL_COOLDOWN:
+            if not self._recalibration_due(entity, now):
                 continue  # already handled recently
             self._last_recal[entity] = now
             _LOGGER.warning("Calibration drift: %s only reached %d%% open while the fleet opened fully", entity, m)
@@ -410,8 +428,7 @@ class GatewayTracker:
     async def _handle_drift(self, entity: str, reach: int) -> None:
         """Notify + (unless the kill switch is off) auto-recalibrate a shade."""
         self.hass.bus.async_fire(CALIBRATE_EVENT, {"entity_id": entity, "reach": reach})
-        kill = self.hass.states.get(AUTO_RECAL_ENTITY)
-        auto = kill is None or kill.state != "off"
+        auto = self._auto_recalibrate_enabled()
         msg = (
             f"{entity} only reached {reach}% open while the other shades opened fully — "
             f"its PowerView limits look miscalibrated. "
@@ -426,3 +443,13 @@ class GatewayTracker:
             )
         if auto:
             await self.async_recalibrate(entity)
+
+    def _auto_recalibrate_enabled(self) -> bool:
+        """Whether automatic calibration is allowed by the optional kill switch."""
+        kill = self.hass.states.get(AUTO_RECAL_ENTITY)
+        return kill is None or kill.state != "off"
+
+    def _recalibration_due(self, entity: str, now: float) -> bool:
+        """Whether an entity has no calibration inside the cooldown window."""
+        last = self._last_recal.get(entity)
+        return last is None or now - last >= CAL_RECAL_COOLDOWN
