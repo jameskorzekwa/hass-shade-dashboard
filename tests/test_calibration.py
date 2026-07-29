@@ -14,6 +14,7 @@ from custom_components.shade_dashboard.const import (
 from custom_components.shade_dashboard.cover import ShadeCover
 from custom_components.shade_dashboard.gateway import (
     CAL_CHECK_INTERVAL,
+    CALIBRATE_LOCK,
     GatewayTracker,
 )
 
@@ -141,6 +142,35 @@ async def test_recalibrate_locks_then_blocks_reentry() -> None:
     # a second call while locked does nothing (no extra POST)
     assert await t.async_recalibrate("cover.x") is False
     assert post.call_count == 1
+
+
+def test_calibration_lock_covers_full_hardware_cycle() -> None:
+    """The lock outlasts the observed three-minute calibration sequence."""
+    t = _tracker()
+    with patch(
+        "custom_components.shade_dashboard.gateway.time.monotonic",
+        side_effect=[0.0, 200.0, CALIBRATE_LOCK + 1],
+    ):
+        t._set_calibrating("cover.x", CALIBRATE_LOCK)
+        assert t.is_calibrating("cover.x") is True
+        assert t.is_calibrating("cover.x") is False
+
+
+def test_calibration_expiry_refresh_is_event_loop_safe() -> None:
+    """The delayed state refresh is marked as an event-loop callback."""
+    cover = ShadeCover("ko1", "cover.kyle_s_office_shade_1", tracked=True)
+    cover.hass = MagicMock()
+    cover.async_write_ha_state = MagicMock()
+    event = MagicMock()
+    event.data = {"entity_id": "cover.kyle_s_office_shade_1", "seconds": CALIBRATE_LOCK}
+
+    with patch("custom_components.shade_dashboard.cover.async_call_later") as call_later:
+        cover._calibrating_event(event)
+
+    refresh = call_later.call_args.args[2]
+    assert getattr(refresh, "_hass_callback", False) is True
+    refresh(None)
+    assert cover.async_write_ha_state.call_count == 2
 
 
 async def test_recalibrate_unlocks_on_gateway_rejection() -> None:

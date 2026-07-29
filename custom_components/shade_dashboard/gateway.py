@@ -63,7 +63,7 @@ CAL_SUSPECT_PCT = 50  # a healthy shade gets at least this far open in the windo
 CAL_RECAL_COOLDOWN = 12 * 3600.0  # don't recalibrate the same shade more often
 # While calibrating a shade drives to both hard stops; lock out other commands
 # for this long so nothing interferes with the limit re-teach.
-CALIBRATE_LOCK = 90.0
+CALIBRATE_LOCK = 240.0
 # Verified moves: a shade "arrived" if within this many % of target (covers the
 # gateway's end calibration offset — fully open reads ~97-98, closed ~2-3).
 MOVE_TOLERANCE = 8

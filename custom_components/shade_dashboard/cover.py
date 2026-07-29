@@ -150,7 +150,11 @@ class ShadeCover(CoverEntity):
         if secs > 0:
             # Refresh once when the lock expires so `calibrating` clears itself
             # even if no more live events arrive after the shade settles.
-            async_call_later(self.hass, secs + 1, lambda _now: self.async_write_ha_state())
+            @callback
+            def _refresh(_now) -> None:
+                self.async_write_ha_state()
+
+            async_call_later(self.hass, secs + 1, _refresh)
 
     def _is_calibrating(self) -> bool:
         """Whether this shade is locked mid-calibration."""
