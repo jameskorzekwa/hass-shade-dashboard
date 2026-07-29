@@ -329,6 +329,9 @@ class GatewayTracker:
                 delay = await self._poll_once()
             except Exception as err:  # noqa: BLE001 - keep polling through transient errors
                 _LOGGER.debug("Gateway poll error: %s", err)
+                # The first reading after an outage is a new baseline, not proof
+                # that every position change during the gap was manual.
+                self._prev_pos.clear()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
 

@@ -47,3 +47,18 @@ async def test_reversing_automatic_move_is_manual(hass: HomeAssistant) -> None:
 
     assert manager.source_move_is_expected(source, previous=100, current=60)
     assert not manager.source_move_is_expected(source, previous=60, current=70)
+
+
+async def test_late_duplicate_transition_remains_automatic(hass: HomeAssistant) -> None:
+    """A delayed endpoint replay stays attributed for the full move window."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    with patch(
+        "custom_components.shade_dashboard.overrides.time.monotonic",
+        side_effect=[0, 40, 45, 64, 76],
+    ):
+        manager.expect_source_move(source, 0)
+        assert manager.source_move_is_expected(source, previous=100, current=20)
+        assert manager.source_move_is_expected(source, previous=20, current=0)
+        assert manager.source_move_is_expected(source, previous=100, current=0)
+        assert not manager.source_move_is_expected(source, previous=0, current=0)
