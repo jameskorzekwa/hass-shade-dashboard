@@ -263,6 +263,31 @@ async def test_gateway_hardware_move_sets_override() -> None:
     overrides.set_source_overridden.assert_called_once_with("cover.a")
 
 
+async def test_gateway_poll_error_discards_stale_override_baseline() -> None:
+    """The first position after a gateway outage cannot create an override."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a"}
+    tracker._prev_pos = {"cover.a": 100}
+
+    async def fail_poll() -> None:
+        tracker._stop.set()
+        raise RuntimeError("gateway unavailable")
+
+    tracker._poll_once = fail_poll
+    await tracker._run()
+    assert tracker._prev_pos == {}
+
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.0}}])
+    tracker._maybe_check_calibration = AsyncMock()
+    overrides = MagicMock()
+    overrides.source_move_is_expected.return_value = False
+    tracker.hass.data = {OVERRIDE_MANAGER_KEY: overrides}
+
+    await GatewayTracker._poll_once(tracker)
+
+    overrides.set_source_overridden.assert_not_called()
+
+
 def test_group_entities_resolution() -> None:
     from custom_components.shade_dashboard.const import abstract_entity, group_entities
 

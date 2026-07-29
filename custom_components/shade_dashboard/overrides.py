@@ -16,8 +16,6 @@ STORAGE_VERSION = 1
 SAVE_DELAY = 1
 EXPECTED_MOVE_SECONDS = 75
 AUTOMATION_CONTEXT_SECONDS = 300
-TARGET_TOLERANCE = 3
-TARGET_GRACE_SECONDS = 5
 DIRECTION_EPS = 1
 
 
@@ -27,7 +25,6 @@ class _ExpectedMove:
 
     expires: float
     target: int | None
-    reached_at: float | None = None
 
 
 class OverrideManager:
@@ -111,15 +108,9 @@ class OverrideManager:
             # expired. That new direction is manual and must override automation.
             self._expected_sources.pop(source_entity, None)
             return False
-
-        if current_distance <= TARGET_TOLERANCE:
-            if expected.reached_at is None:
-                expected.reached_at = now
-            elif now - expected.reached_at >= TARGET_GRACE_SECONDS:
-                self._expected_sources.pop(source_entity, None)
-                return False
-        else:
-            expected.reached_at = None
+        # Keep attribution for the full window after arrival. The gateway can
+        # replay a late endpoint transition; a real manual reversal is still
+        # detected immediately by the distance check above.
         return True
 
     def mark_automation_context(self, context: Context) -> None:
