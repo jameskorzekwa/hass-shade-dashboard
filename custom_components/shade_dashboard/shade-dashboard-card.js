@@ -73,6 +73,13 @@ export function loadSessionFloor(storage) {
   }
 }
 
+export function overriddenShadeEntities(layout, hass) {
+  const states = (hass && hass.states) || {};
+  return Object.values((layout && layout.shades) || {})
+    .map((shade) => shade.entity)
+    .filter((entity) => states[entity] && states[entity].attributes && states[entity].attributes.automation_override);
+}
+
 function saveSessionFloor(storage, floor) {
   try { if (storage && (floor === "main" || floor === "up")) storage.setItem(SESSION_FLOOR_KEY, floor); } catch (_e) { /* storage unavailable */ }
 }
@@ -504,6 +511,9 @@ const toggleRow = (key, t) =>
     `<span style="display:flex;flex-direction:column;gap:3px;text-align:left"><span style="font-weight:600;font-size:14px;color:#26211B">${t.title}</span><span data-toggle-desc="${key}" style="font-size:11px;color:#8A8177"></span></span>` +
     `<span data-toggle-switch="${key}" style="flex-shrink:0;width:40px;height:23px;border-radius:999px;background:#D9D2C4;position:relative;transition:background .2s"><span data-toggle-knob="${key}" style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#FFF;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></span>` +
   `</button>`;
+const resumeAllRow = () =>
+  `<button data-resume-all style="display:none;text-align:left;padding:12px 14px;border:1px solid ${ACCENT};border-radius:12px;background:#FBF4E8;cursor:pointer;flex-direction:column;gap:3px">` +
+    `<span style="font-weight:600;font-size:14px;color:#26211B">Resume All Automation</span><span data-resume-all-desc style="font-size:11px;color:#8A8177"></span></button>`;
 
 // In Node (tests/js/solar.test.mjs imports this module for the solar math)
 // there is no DOM — stub the base class; HA always provides the real one.
@@ -1359,6 +1369,7 @@ class ShadeDashboardCard extends BaseElement {
     ${sceneBtn("close_all", sc.close_all)}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:6px">MODES</div>
     ${Object.keys(tg).map((k) => toggleRow(k, tg[k])).join("")}
+    ${resumeAllRow()}
     <div style="flex:1"></div>
     <div data-summary style="font-size:11px;color:#8A8177"></div>
   </div>
@@ -1480,6 +1491,7 @@ class ShadeDashboardCard extends BaseElement {
     ${SECTIONS.map(section).join("")}
     <div style="font-size:10px;letter-spacing:1.4px;color:#8A8177;font-weight:600;margin-top:4px">MODES</div>
     ${Object.keys(tg).map((k) => toggleRow(k, tg[k])).join("")}
+    ${resumeAllRow()}
   </div>
 
   <div data-panel="settings" style="flex:1;overflow-y:auto;padding:4px 14px 150px;display:none;flex-direction:column;gap:10px">
@@ -1530,6 +1542,7 @@ class ShadeDashboardCard extends BaseElement {
     root.querySelectorAll("[data-toggle]").forEach((el) =>
       el.addEventListener("click", () => this._toggle(el.getAttribute("data-toggle")))
     );
+    root.querySelector("[data-resume-all]").addEventListener("click", () => this._resumeAll());
     // control bar
     root.querySelector("[data-bar-close]").addEventListener("click", () => { this._selected = null; this._update(); });
     // The UI shows a CLOSED percentage (0% = open, 100% = closed); HA's
@@ -1570,6 +1583,11 @@ class ShadeDashboardCard extends BaseElement {
     if (!this._selected || !this._hass) return;
     this._hass.callService("shade_dashboard", "clear_override", { entity_id: this._entity(this._selected) });
   }
+  _resumeAll() {
+    if (!this._hass) return;
+    const entities = overriddenShadeEntities(this._layout, this._hass);
+    if (entities.length) this._hass.callService("shade_dashboard", "clear_override", { entity_id: entities });
+  }
   // Recalibrate re-teaches the shade's limits and drives it to both hard stops
   // (~1 min), so it takes two taps: the first arms a 4s confirm.
   _recalSelected() {
@@ -1601,7 +1619,7 @@ class ShadeDashboardCard extends BaseElement {
     // Flash every member at once, then move them all in one synchronized call
     // (no PowerView scene — see shade_dashboard.move_group).
     entities.forEach((e) => this._mark(e, position));
-    this._hass.callService("shade_dashboard", "move_group", { entity_id: entities, position });
+    this._hass.callService("shade_dashboard", "move_group", { entity_id: entities, position, verify: true });
     this._update();
   }
   _scene(key) {
@@ -1746,6 +1764,14 @@ class ShadeDashboardCard extends BaseElement {
       root.querySelector(`[data-toggle-knob="${key}"]`).style.left = on ? "19px" : "2px";
       const desc = root.querySelector(`[data-toggle-desc="${key}"]`);
       if (desc) desc.textContent = on ? t.desc_on : t.desc_off;
+    }
+
+    const overridden = overriddenShadeEntities(this._layout, this._hass);
+    const resumeAll = root.querySelector("[data-resume-all]");
+    if (resumeAll) {
+      resumeAll.style.display = overridden.length ? "flex" : "none";
+      resumeAll.querySelector("[data-resume-all-desc]").textContent =
+        `${overridden.length} paused shade${overridden.length === 1 ? "" : "s"}`;
     }
 
     // summary

@@ -45,8 +45,8 @@ MOVE_GROUP_SCHEMA = vol.Schema(
             vol.Optional("entity_id"): vol.All(cv.ensure_list, [cv.entity_id]),
             vol.Optional("group"): cv.string,
             vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            # verify=true confirms arrival + retries stragglers + notifies on failure
-            # (for automations); the dashboard leaves it off for instant feedback.
+            # verify=true confirms arrival + retries stragglers + notifies on failure.
+            # Dashboard bulk controls enable it while still updating visually at once.
             vol.Optional("verify", default=False): cv.boolean,
             # Automatic calls skip persistent per-shade manual overrides. The
             # dashboard leaves this false, so its group controls are manual.
@@ -91,11 +91,8 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
             tracked_sources.append(source)
         else:
             untracked.append(entity)
-    if tracked_sources and tracker is not None:
-        if verify:
-            await tracker.async_move_group_verified(tracked_sources, position / 100)
-        else:
-            await tracker.async_move_group(tracked_sources, position / 100)
+    # Do not make untracked shades wait for a potentially long PowerView
+    # verification/retry cycle before they receive their command.
     for entity in untracked:
         await hass.services.async_call(
             "cover",
@@ -104,6 +101,11 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
             blocking=False,
             context=call.context,
         )
+    if tracked_sources and tracker is not None:
+        if verify:
+            await tracker.async_move_group_verified(tracked_sources, position / 100)
+        else:
+            await tracker.async_move_group(tracked_sources, position / 100)
 
 
 # Unified per-shade covers that front the real devices (see cover.py). Their
