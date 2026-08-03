@@ -99,7 +99,11 @@ async def test_service_splits_tracked_and_untracked() -> None:
     hass.services.async_call = AsyncMock()
 
     call = MagicMock()
-    call.data = {"entity_id": [abstract_entity("ko1"), abstract_entity("mbr1")], "position": 100}
+    call.data = {
+        "entity_id": [abstract_entity("ko1"), abstract_entity("mbr1")],
+        "position": 100,
+        "verify": False,
+    }
     await _async_move_group(hass, call)
 
     # tracked office shade -> one synced gateway move at primary 1.0
@@ -156,6 +160,7 @@ async def test_move_group_service_is_awaited_end_to_end(hass: HomeAssistant) -> 
     tracker = hass.data[TRACKER_KEY]
     tracker.has_gateway_id = lambda src: True
     tracker.async_move_group = AsyncMock()
+    tracker.async_move_group_verified = AsyncMock()
 
     await hass.services.async_call(
         "shade_dashboard",
@@ -164,8 +169,9 @@ async def test_move_group_service_is_awaited_end_to_end(hass: HomeAssistant) -> 
         blocking=True,
     )
 
-    tracker.async_move_group.assert_awaited_once()
-    sources, primary = tracker.async_move_group.await_args.args
+    tracker.async_move_group_verified.assert_awaited_once()
+    tracker.async_move_group.assert_not_awaited()
+    sources, primary = tracker.async_move_group_verified.await_args.args
     assert sources == [SHADES["ko1"]]
     assert primary == 1.0
 
@@ -309,6 +315,7 @@ async def test_manual_group_move_sets_each_override() -> None:
     tracker = MagicMock()
     tracker.has_gateway_id.return_value = True
     tracker.async_move_group = AsyncMock()
+    tracker.async_move_group_verified = AsyncMock()
     overrides = MagicMock()
     hass.data = {TRACKER_KEY: tracker, OVERRIDE_MANAGER_KEY: overrides}
     call = MagicMock()

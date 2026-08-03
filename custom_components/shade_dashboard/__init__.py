@@ -45,9 +45,9 @@ MOVE_GROUP_SCHEMA = vol.Schema(
             vol.Optional("entity_id"): vol.All(cv.ensure_list, [cv.entity_id]),
             vol.Optional("group"): cv.string,
             vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            # verify=true confirms arrival + retries stragglers + notifies on failure.
-            # Dashboard bulk controls enable it while still updating visually at once.
-            vol.Optional("verify", default=False): cv.boolean,
+            # Verification is the safe default even for stale dashboard clients
+            # that predate the explicit flag. Callers may opt out when required.
+            vol.Optional("verify", default=True): cv.boolean,
             # Automatic calls skip persistent per-shade manual overrides. The
             # dashboard leaves this false, so its group controls are manual.
             vol.Optional("respect_overrides", default=False): cv.boolean,
@@ -61,8 +61,9 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
     """Move a group of shades to one position in sync (no PowerView scenes).
 
     Gateway-tracked members go out in a single synchronized positions call
-    (verified + self-healing when ``verify`` is set); untracked members (the RYSE
-    main bedroom) go via their own cover, which handles routing + the lock.
+    (verified + self-healing unless ``verify`` is explicitly disabled); untracked
+    members (the RYSE main bedroom) go via their own cover, which handles routing
+    + the lock.
     """
     entities = list(call.data.get("entity_id") or [])
     if "group" in call.data:
@@ -72,7 +73,7 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
             return
         entities += resolved
     position = call.data["position"]
-    verify = call.data.get("verify", False)
+    verify = call.data.get("verify", True)
     respect_overrides = call.data.get("respect_overrides", False)
     overrides: OverrideManager | None = hass.data.get(OVERRIDE_MANAGER_KEY)
     if overrides is not None:
