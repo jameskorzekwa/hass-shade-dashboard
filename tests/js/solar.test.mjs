@@ -19,7 +19,7 @@ const cardPath = fileURLToPath(
 );
 const src = await readFile(cardPath);
 const cardSource = src.toString();
-const { formatLux, loadDevicePreferences, loadSessionFloor, luxContrast, normalizeDevicePreferences, resolveSelectableFloor, skyPalette, solarPos, sunOnWall } = await import(
+const { formatLux, loadDevicePreferences, loadSessionFloor, luxContrast, normalizeDevicePreferences, overriddenShadeEntities, resolveSelectableFloor, skyPalette, solarPos, sunOnWall } = await import(
   "data:text/javascript;base64," + src.toString("base64")
 );
 
@@ -102,6 +102,25 @@ test("sun test shade controls are simulation-only", () => {
 test("settings buttons use the Home Assistant Material Design icon", () => {
   assert.equal((cardSource.match(/<ha-icon icon="mdi:cog"/g) || []).length, 2);
   assert.doesNotMatch(cardSource, /⚙/);
+});
+
+test("bulk controls verify movement so missed shades are retried", () => {
+  assert.match(cardSource, /callService\("shade_dashboard", "move_group", \{ entity_id: entities, position, verify: true \}\)/);
+});
+
+test("resume all automation targets overridden shades and stays hidden otherwise", () => {
+  const layout = { shades: { a: { entity: "cover.a" }, b: { entity: "cover.b" } } };
+  const hass = {
+    states: {
+      "cover.a": { attributes: { automation_override: true } },
+      "cover.b": { attributes: { automation_override: false } },
+    },
+  };
+  assert.deepEqual(overriddenShadeEntities(layout, hass), ["cover.a"]);
+  assert.deepEqual(overriddenShadeEntities(layout, { states: {} }), []);
+  assert.equal((cardSource.match(/resumeAllRow\(\)/g) || []).length, 2);
+  assert.match(cardSource, /callService\("shade_dashboard", "clear_override", \{ entity_id: entities \}\)/);
+  assert.match(cardSource, /resumeAll\.style\.display = overridden\.length \? "flex" : "none"/);
 });
 
 test("sun test offers display-independent playback speeds", () => {

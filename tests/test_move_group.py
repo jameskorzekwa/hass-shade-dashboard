@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -111,6 +112,37 @@ async def test_service_splits_tracked_and_untracked() -> None:
     dom, svc, data = hass.services.async_call.await_args.args[:3]
     assert (dom, svc) == ("cover", "set_cover_position")
     assert data == {"entity_id": abstract_entity("mbr1"), "position": 100}
+
+
+async def test_service_dispatches_untracked_before_verified_wait() -> None:
+    """The RYSE shade starts immediately while PowerView verification runs."""
+    hass = MagicMock()
+    tracker = MagicMock()
+    tracker.has_gateway_id = lambda src: src != SHADES["mbr1"]
+    verification_started = asyncio.Event()
+    finish_verification = asyncio.Event()
+
+    async def verify(*_args) -> None:
+        verification_started.set()
+        await finish_verification.wait()
+
+    tracker.async_move_group_verified = AsyncMock(side_effect=verify)
+    hass.data = {TRACKER_KEY: tracker}
+    hass.services.async_call = AsyncMock()
+    call = MagicMock()
+    call.data = {
+        "entity_id": [abstract_entity("ko1"), abstract_entity("mbr1")],
+        "position": 100,
+        "verify": True,
+    }
+
+    task = asyncio.create_task(_async_move_group(hass, call))
+    try:
+        await asyncio.wait_for(verification_started.wait(), timeout=1)
+        hass.services.async_call.assert_awaited_once()
+    finally:
+        finish_verification.set()
+        await task
 
 
 async def test_move_group_service_is_awaited_end_to_end(hass: HomeAssistant) -> None:
