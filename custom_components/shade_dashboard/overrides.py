@@ -25,6 +25,7 @@ class _ExpectedMove:
 
     expires: float
     target: int | None
+    attribution_seconds: float
 
 
 class OverrideManager:
@@ -80,6 +81,7 @@ class OverrideManager:
         self._expected_sources[source_entity] = _ExpectedMove(
             expires=time.monotonic() + seconds,
             target=target,
+            attribution_seconds=seconds,
         )
 
     def source_move_is_expected(
@@ -108,9 +110,11 @@ class OverrideManager:
             # expired. That new direction is manual and must override automation.
             self._expected_sources.pop(source_entity, None)
             return False
-        # Keep attribution for the full window after arrival. The gateway can
-        # replay a late endpoint transition; a real manual reversal is still
-        # detected immediately by the distance check above.
+        if abs(delta) > DIRECTION_EPS:
+            # Gateway commands can sit queued long enough that a shade is still
+            # moving after the original deadline. Keep the full attribution
+            # window after its latest progress, including an endpoint replay.
+            expected.expires = now + expected.attribution_seconds
         return True
 
     def mark_automation_context(self, context: Context) -> None:
