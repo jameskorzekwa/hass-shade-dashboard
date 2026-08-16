@@ -50,15 +50,30 @@ async def test_reversing_automatic_move_is_manual(hass: HomeAssistant) -> None:
 
 
 async def test_late_duplicate_transition_remains_automatic(hass: HomeAssistant) -> None:
-    """A delayed endpoint replay stays attributed for the full move window."""
+    """A delayed endpoint replay stays attributed after the latest progress."""
     manager = OverrideManager(hass)
     source = "cover.source"
     with patch(
         "custom_components.shade_dashboard.overrides.time.monotonic",
-        side_effect=[0, 40, 45, 64, 76],
+        side_effect=[0, 40, 45, 64, 76, 140],
     ):
         manager.expect_source_move(source, 0)
         assert manager.source_move_is_expected(source, previous=100, current=20)
         assert manager.source_move_is_expected(source, previous=20, current=0)
         assert manager.source_move_is_expected(source, previous=100, current=0)
+        assert manager.source_move_is_expected(source, previous=0, current=0)
+        assert not manager.source_move_is_expected(source, previous=0, current=0)
+
+
+async def test_delayed_automatic_move_does_not_set_override_at_endpoint(hass: HomeAssistant) -> None:
+    """Progress renews attribution when a queued gateway move outlasts its command window."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    with patch(
+        "custom_components.shade_dashboard.overrides.time.monotonic",
+        side_effect=[0, 73, 83, 159],
+    ):
+        manager.expect_source_move(source, 0)
+        assert manager.source_move_is_expected(source, previous=100, current=96)
+        assert manager.source_move_is_expected(source, previous=96, current=0)
         assert not manager.source_move_is_expected(source, previous=0, current=0)
