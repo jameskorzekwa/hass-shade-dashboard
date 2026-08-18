@@ -372,6 +372,50 @@ async def test_gateway_poll_error_discards_stale_override_baseline() -> None:
     overrides.set_source_overridden.assert_not_called()
 
 
+async def test_gateway_unavailable_source_discards_reconnect_positions() -> None:
+    """Zeroed reconnect data cannot override an open shade after an outage."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a"}
+    tracker._prev_pos = {"cover.a": 100}
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.0}}])
+    tracker._maybe_check_calibration = AsyncMock()
+    source_state = MagicMock(state="unavailable")
+    tracker.hass.states.get.return_value = source_state
+    overrides = MagicMock()
+    overrides.source_move_is_expected.return_value = False
+    tracker.hass.data = {OVERRIDE_MANAGER_KEY: overrides}
+
+    await tracker._poll_once()
+
+    assert tracker._prev_pos == {}
+    overrides.set_source_overridden.assert_not_called()
+
+    source_state.state = "open"
+    tracker._get.return_value = [{"id": 1, "positions": {"primary": 1.0}}]
+    await tracker._poll_once()
+
+    assert tracker._prev_pos == {"cover.a": 100}
+    overrides.set_source_overridden.assert_not_called()
+
+
+async def test_gateway_missing_position_discards_stale_baseline() -> None:
+    """An incomplete successful response is an outage, not a move to zero."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a"}
+    tracker._prev_pos = {"cover.a": 100}
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {}}])
+    tracker._maybe_check_calibration = AsyncMock()
+    tracker.hass.states.get.return_value = None
+    overrides = MagicMock()
+    overrides.source_move_is_expected.return_value = False
+    tracker.hass.data = {OVERRIDE_MANAGER_KEY: overrides}
+
+    await tracker._poll_once()
+
+    assert tracker._prev_pos == {}
+    overrides.set_source_overridden.assert_not_called()
+
+
 def test_group_entities_resolution() -> None:
     from custom_components.shade_dashboard.const import abstract_entity, group_entities
 

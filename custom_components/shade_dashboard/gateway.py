@@ -21,6 +21,7 @@ import contextlib
 import logging
 import time
 
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -81,6 +82,17 @@ def _list(data, *keys):
         if isinstance(data.get(k), list):
             return data[k]
     return []
+
+
+def _shade_position(shade) -> int | None:
+    """Return a valid gateway position without treating missing data as closed."""
+    positions = shade.get("positions")
+    if not isinstance(positions, dict):
+        return None
+    primary = positions.get("primary")
+    if not isinstance(primary, (int, float)):
+        return None
+    return round(primary * 100)
 
 
 class GatewayTracker:
@@ -157,7 +169,7 @@ class GatewayTracker:
             if gid is None or self.is_calibrating(e):
                 continue
             st = self.hass.states.get(e)
-            if st is not None and st.state == "unavailable":
+            if st is not None and st.state == STATE_UNAVAILABLE:
                 continue
             out[e] = gid
         return out
@@ -176,9 +188,13 @@ class GatewayTracker:
         """Read current 0-100 positions for the given gateway ids."""
         shades = _list(await self._get("/home/shades"), "shadeData", "shades")
         idset = set(ids)
-        return {
-            s["id"]: round((s.get("positions") or {}).get("primary", 0) * 100) for s in shades if s.get("id") in idset
-        }
+        positions: dict[int, int] = {}
+        for shade in shades:
+            gateway_id = shade.get("id")
+            value = _shade_position(shade)
+            if gateway_id in idset and value is not None:
+                positions[gateway_id] = value
+        return positions
 
     async def _wait_settled(self, ids: list[int], target: int) -> dict[int, int]:
         """Poll until every shade is at target or has moved-then-stopped (or timeout)."""
@@ -362,8 +378,13 @@ class GatewayTracker:
             entity = self._id_to_entity.get(shade.get("id"))
             if not entity:
                 continue
-            pos = shade.get("positions") or {}
-            value = round((pos.get("primary") or 0) * 100)
+            value = _shade_position(shade)
+            source_state = self.hass.states.get(entity)
+            if value is None or (source_state is not None and source_state.state == STATE_UNAVAILABLE):
+                # During a gateway reconnect the core integration becomes
+                # unavailable while the local API can emit empty/zeroed data.
+                # Omitting it here makes the next healthy reading a baseline.
+                continue
             positions[entity] = value
             # velocity/motion are unreliable (usually 0/None even mid-travel), so
             # motion = "position changed within the last MOVE_HOLD seconds".
