@@ -203,6 +203,22 @@ async def test_start_restores_persisted_calibration_lock() -> None:
     manager.active_moves.assert_called_once_with("calibration")
 
 
+async def test_cover_schedules_refresh_for_restored_calibration_lock() -> None:
+    """A cover added after lock restoration still refreshes at expiry."""
+    cover = ShadeCover("ko1", "cover.kyle_s_office_shade_1", tracked=True)
+    tracker = MagicMock()
+    tracker.calibration_remaining.return_value = 120
+    cover.hass = MagicMock()
+    cover.hass.data = {TRACKER_KEY: tracker}
+    cover.async_on_remove = MagicMock()
+    cover._schedule_calibration_refresh = MagicMock()
+
+    with patch("custom_components.shade_dashboard.cover.async_track_state_change_event", return_value=MagicMock()):
+        await cover.async_added_to_hass()
+
+    cover._schedule_calibration_refresh.assert_called_once_with(120)
+
+
 async def test_cover_blocks_commands_while_calibrating() -> None:
     """Open/close/set/stop are refused (routed nowhere) during calibration."""
     cover = ShadeCover("ko1", "cover.kyle_s_office_shade_1", tracked=True)

@@ -30,6 +30,7 @@ class _ExpectedMove:
     direction: int | None
     kind: str
     attribution_seconds: float
+    restore_expires_at: float | None = None
 
 
 class OverrideManager:
@@ -75,6 +76,9 @@ class OverrideManager:
                 kind = saved.get("kind", "move")
                 if not isinstance(kind, str):
                     continue
+                restore_expires_at = saved.get("restore_expires_at")
+                if restore_expires_at is not None and not isinstance(restore_expires_at, (int, float)):
+                    continue
                 remaining = expires_at - now_at
                 if remaining <= 0 or seconds <= 0:
                     continue
@@ -86,6 +90,7 @@ class OverrideManager:
                         direction=direction,
                         kind=kind,
                         attribution_seconds=seconds,
+                        restore_expires_at=float(restore_expires_at) if restore_expires_at is not None else None,
                     )
                 )
             if moves:
@@ -104,6 +109,11 @@ class OverrideManager:
     def is_overridden(self, entity_id: str) -> bool:
         """Return whether an abstract shade is excluded from automation."""
         return entity_id in self._overrides
+
+    def is_source_overridden(self, source_entity: str) -> bool:
+        """Return whether a real source cover is excluded from automation."""
+        entity_id = self._source_to_abstract.get(source_entity)
+        return entity_id is not None and entity_id in self._overrides
 
     def set_overridden(self, entity_id: str, overridden: bool) -> None:
         """Update one override and notify its cover entity."""
@@ -134,6 +144,7 @@ class OverrideManager:
         seconds: float = EXPECTED_MOVE_SECONDS,
         direction: int | None = None,
         kind: str = "move",
+        restore_seconds: float | None = None,
     ) -> None:
         """Suppress hardware-movement detection for an integration-issued move."""
         now = time.monotonic()
@@ -144,6 +155,10 @@ class OverrideManager:
                 move.expires = now + seconds
                 move.expires_at = now_at + seconds
                 move.attribution_seconds = seconds
+                if restore_seconds is not None:
+                    move.restore_expires_at = now_at + restore_seconds
+                expected_moves.remove(move)
+                expected_moves.append(move)
                 self._expected_sources[source_entity] = expected_moves
                 self._schedule_save()
                 return
@@ -155,6 +170,7 @@ class OverrideManager:
                 direction=direction,
                 kind=kind,
                 attribution_seconds=seconds,
+                restore_expires_at=now_at + restore_seconds if restore_seconds is not None else None,
             )
         )
         self._expected_sources[source_entity] = expected_moves
@@ -168,6 +184,7 @@ class OverrideManager:
         current: int | None = None,
         direction: int | None = None,
         settled: bool = False,
+        arrival_tolerance: int = ARRIVAL_EPS,
     ) -> bool:
         """Attribute motion to an integration command while it heads to target."""
         now = time.monotonic()
@@ -181,14 +198,23 @@ class OverrideManager:
             return True
 
         latest = expected_moves[-1]
-        if len(expected_moves) > 1 and latest.target is not None and abs(latest.target - current) <= ARRIVAL_EPS:
+        if len(expected_moves) > 1 and latest.target is not None and abs(latest.target - current) <= arrival_tolerance:
             expected_moves = [latest]
             self._expected_sources[source_entity] = expected_moves
             self._schedule_save()
 
         delta = current - previous
+        resume_moves = [move for move in expected_moves if move.kind == "resume"]
+        if settled and resume_moves:
+            remaining = [move for move in expected_moves if move.kind != "resume"]
+            if remaining:
+                self._expected_sources[source_entity] = remaining
+            else:
+                self._expected_sources.pop(source_entity, None)
+            self._schedule_save()
+            return True
         if settled and not any(
-            move.target is None or abs(move.target - current) <= ARRIVAL_EPS for move in expected_moves
+            move.target is None or abs(move.target - current) <= arrival_tolerance for move in expected_moves
         ):
             self._expected_sources.pop(source_entity, None)
             self._schedule_save()
@@ -208,8 +234,8 @@ class OverrideManager:
                 move
                 for move in expected_moves
                 if (move.target is None and (move.direction is None or move.direction == direction))
-                or (direction > 0 and move.target > previous)
-                or (direction < 0 and move.target < previous)
+                or (move.target is not None and direction > 0 and move.target > previous)
+                or (move.target is not None and direction < 0 and move.target < previous)
             ]
         if not matching:
             # Motion away from every active automatic target is a genuine manual
@@ -230,14 +256,43 @@ class OverrideManager:
         if self._expected_sources.pop(source_entity, None) is not None:
             self._schedule_save()
 
+    def cancel_source_move(
+        self,
+        source_entity: str,
+        target: int | None,
+        *,
+        direction: int | None = None,
+        kind: str = "move",
+    ) -> None:
+        """Drop one command attribution while preserving other active targets."""
+        moves = self._expected_sources.get(source_entity)
+        if not moves:
+            return
+        remaining = [
+            move for move in moves if not (move.target == target and move.direction == direction and move.kind == kind)
+        ]
+        if len(remaining) == len(moves):
+            return
+        if remaining:
+            self._expected_sources[source_entity] = remaining
+        else:
+            self._expected_sources.pop(source_entity, None)
+        self._schedule_save()
+
     def active_moves(self, kind: str) -> list[tuple[str, float]]:
         """Return active source moves of one kind with remaining seconds."""
         now = time.monotonic()
+        now_at = time.time()
         return [
-            (source, move.expires - now)
+            (
+                source,
+                move.restore_expires_at - now_at if move.restore_expires_at is not None else move.expires - now,
+            )
             for source, moves in self._expected_sources.items()
             for move in moves
-            if move.kind == kind and now < move.expires
+            if move.kind == kind
+            and now < move.expires
+            and (move.restore_expires_at is None or now_at < move.restore_expires_at)
         ]
 
     def set_source_followup(self, source_entity: str, target: int | None) -> None:
@@ -297,6 +352,7 @@ class OverrideManager:
                     "kind": move.kind,
                     "expires_at": move.expires_at,
                     "attribution_seconds": move.attribution_seconds,
+                    "restore_expires_at": move.restore_expires_at,
                 }
                 for move in moves
                 if now_at < move.expires_at

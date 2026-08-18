@@ -205,7 +205,11 @@ class GatewayTracker:
             for entity in movable:
                 manager.expect_source_move(entity, round(primary * 100))
         ids = list(movable.values())
-        return await self._put_positions(ids, primary)
+        result = await self._put_positions(ids, primary)
+        if result is False and manager is not None:
+            for entity in movable:
+                manager.cancel_source_move(entity, round(primary * 100))
+        return result
 
     async def _read_positions(self, ids) -> dict[int, int]:
         """Read current 0-100 positions for the given gateway ids."""
@@ -277,35 +281,41 @@ class GatewayTracker:
         claims = self._claim_source_moves(pending)
         target = round(max(0.0, min(1.0, primary)) * 100)
         confirmed_put = False
+        manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
         for _attempt in range(retries + 1):
             pending = {
                 entity: gateway_id
                 for entity, gateway_id in pending.items()
-                if self._command_generation.get(entity) == claims[entity] and self._source_is_movable(entity)
+                if self._command_generation.get(entity) == claims[entity]
+                and self._source_is_movable(entity)
+                and not (manager is not None and manager.is_source_overridden(entity))
             }
             if not pending:
                 break
-            manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
             if manager is not None:
                 for entity in pending:
                     manager.expect_source_move(entity, target)
             put_result = await self._put_positions(list(pending.values()), primary)
             confirmed_put |= put_result is True
+            if put_result is False and manager is not None:
+                for entity in pending:
+                    manager.cancel_source_move(entity, target)
             final = await self._wait_settled(list(pending.values()), target)
             pending = {
                 entity: gateway_id
                 for entity, gateway_id in pending.items()
                 if self._command_generation.get(entity) == claims[entity]
                 and self._source_is_movable(entity)
+                and not (manager is not None and manager.is_source_overridden(entity))
                 and abs(final.get(gateway_id, -999) - target) > MOVE_TOLERANCE
             }
             if not pending:
                 break
         failed = list(pending)
         if failed:
-            if not confirmed_put and (manager := self.hass.data.get(OVERRIDE_MANAGER_KEY)):
+            if not confirmed_put and manager is not None:
                 for entity in failed:
-                    manager.cancel_source_moves(entity)
+                    manager.cancel_source_move(entity, target)
             await self._notify_move_failure(failed, target, allow_recalibrate=confirmed_put)
         return failed
 
@@ -361,6 +371,10 @@ class GatewayTracker:
         """Whether a shade is currently locked mid-calibration."""
         return time.monotonic() < self._calibrating.get(entity_id, 0.0)
 
+    def calibration_remaining(self, entity_id: str) -> float:
+        """Return seconds remaining on one calibration lock."""
+        return max(0.0, self._calibrating.get(entity_id, 0.0) - time.monotonic())
+
     def _set_calibrating(self, entity_id: str, seconds: float) -> None:
         """Lock/unlock a shade and tell its cover (seconds=0 unlocks)."""
         if seconds > 0:
@@ -383,7 +397,12 @@ class GatewayTracker:
         self.supersede_source_move(entity_id)
         manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
         if manager:
-            manager.expect_source_move(entity_id, seconds=CALIBRATE_LOCK + 15, kind="calibration")
+            manager.expect_source_move(
+                entity_id,
+                seconds=CALIBRATE_LOCK + 15,
+                kind="calibration",
+                restore_seconds=CALIBRATE_LOCK,
+            )
         try:
             # bleName contains a ':' — build the URL directly to avoid re-encoding.
             url = f"http://{self._host}/home/shades/exec?shades={ble}"
@@ -408,8 +427,7 @@ class GatewayTracker:
     async def start(self) -> None:
         if manager := self.hass.data.get(OVERRIDE_MANAGER_KEY):
             for entity, remaining in manager.active_moves("calibration"):
-                if (lock_remaining := remaining - 15) > 0:
-                    self._set_calibrating(entity, lock_remaining)
+                self._set_calibrating(entity, remaining)
         try:
             await self._build_map()
         except Exception:  # noqa: BLE001 - never break setup on a gateway hiccup
@@ -468,6 +486,7 @@ class GatewayTracker:
                     entity,
                     previous=prev,
                     current=value,
+                    arrival_tolerance=MOVE_TOLERANCE,
                 )
             )
             confirmed_manual = False

@@ -25,6 +25,7 @@ def _verify_tracker(available: bool = True) -> GatewayTracker:
     t = _tracker()
     t._entity_to_id = {"cover.a": 1, "cover.b": 2}
     t.hass = MagicMock()
+    t.hass.data = {}
     t.hass.states.get.return_value = None if available else _unavail()
     t.hass.services.async_call = AsyncMock()
     t._put_positions = AsyncMock(return_value=True)
@@ -87,6 +88,19 @@ async def test_move_group_no_gateway_members_no_call() -> None:
     put = _mock_put(t)
     assert await t.async_move_group(["cover.x"], 1.0) is False
     put.assert_not_called()
+
+
+async def test_fire_and_forget_rejection_cancels_attribution() -> None:
+    """A definitive HTTP rejection cannot hide a later manual movement."""
+    t = _tracker()
+    t._entity_to_id = {"cover.a": 1}
+    t._put_positions = AsyncMock(return_value=False)
+    manager = MagicMock()
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
+
+    assert await t.async_move_group(["cover.a"], 0.0) is False
+
+    manager.cancel_source_move.assert_called_once_with("cover.a", 0)
 
 
 async def test_service_splits_tracked_and_untracked() -> None:
@@ -242,11 +256,14 @@ async def test_unconfirmed_put_failure_never_recalibrates() -> None:
     t._put_positions = AsyncMock(return_value=None)
     t._wait_settled = AsyncMock(side_effect=[{1: 40}, {1: 40}])
     t.async_recalibrate = AsyncMock(return_value=True)
-    t.hass.data = {}
+    manager = MagicMock()
+    manager.is_source_overridden.return_value = False
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
 
     assert await t.async_move_group_verified(["cover.a"], 1.0) == ["cover.a"]
 
     t.async_recalibrate.assert_not_awaited()
+    assert manager.cancel_source_move.call_count >= 1
     message = t.hass.services.async_call.await_args.args[2]["message"]
     assert "did not confirm either command" in message
 
@@ -330,6 +347,7 @@ async def test_verified_move_skips_unavailable_members() -> None:
     t = _tracker()
     t._entity_to_id = {"cover.a": 1, "cover.b": 2}
     t.hass = MagicMock()
+    t.hass.data = {}
     t.hass.states.get.side_effect = lambda e: _unavail() if e == "cover.a" else None
     t.hass.services.async_call = AsyncMock()
     t._put_positions = AsyncMock(return_value=True)

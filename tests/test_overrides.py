@@ -114,6 +114,29 @@ async def test_arriving_at_latest_target_retires_superseded_target(hass: HomeAss
     assert not manager.source_move_is_expected(source, previous=100, current=80)
 
 
+async def test_reissued_old_target_becomes_latest(hass: HomeAssistant) -> None:
+    """A/B/A command ordering retires B when the final A arrives."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+    manager.expect_source_move(source, 0)
+
+    assert manager.source_move_is_expected(source, previous=20, current=0)
+    assert not manager.source_move_is_expected(source, previous=0, current=20)
+
+
+async def test_gateway_arrival_tolerance_retires_superseded_target(hass: HomeAssistant) -> None:
+    """A verified 94% endpoint retires an older close target."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+
+    assert manager.source_move_is_expected(source, previous=80, current=94, arrival_tolerance=8)
+    assert not manager.source_move_is_expected(source, previous=94, current=80, arrival_tolerance=8)
+
+
 async def test_resume_attribution_only_allows_current_direction(hass: HomeAssistant) -> None:
     """Resume lets the active movement finish but a rapid reversal is manual."""
     manager = OverrideManager(hass)
@@ -122,6 +145,41 @@ async def test_resume_attribution_only_allows_current_direction(hass: HomeAssist
 
     assert manager.source_move_is_expected(source, previous=100, current=80)
     assert not manager.source_move_is_expected(source, previous=80, current=90)
+
+
+async def test_resume_stale_position_opposite_direction_is_manual(hass: HomeAssistant) -> None:
+    """Direction-only RYSE reports cannot compare a None target with a position."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    assert not manager.source_move_is_expected(source, previous=80, current=80, direction=1)
+
+
+async def test_resume_settlement_retires_direction_attribution(hass: HomeAssistant) -> None:
+    """A later same-direction manual move is not hidden after resume settles."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    assert manager.source_move_is_expected(source, previous=80, current=40, settled=True)
+    assert not manager.source_move_is_expected(source, previous=40, current=20)
+
+
+async def test_calibration_progress_does_not_extend_persisted_lock(hass: HomeAssistant) -> None:
+    """Attribution may slide, but restart restores only the original lock period."""
+    manager = OverrideManager(hass)
+    source = SHADES["u1"]
+    manager.expect_source_move(
+        source,
+        seconds=255,
+        kind="calibration",
+        restore_seconds=240,
+    )
+    restore_expiry = manager._expected_sources[source][0].restore_expires_at
+
+    assert manager.source_move_is_expected(source, previous=100, current=50)
+    assert manager._expected_sources[source][0].restore_expires_at == restore_expiry
 
 
 async def test_stale_ryse_position_uses_reported_direction(hass: HomeAssistant) -> None:

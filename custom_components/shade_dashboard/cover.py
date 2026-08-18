@@ -135,6 +135,10 @@ class ShadeCover(CoverEntity):
         if self._tracked:
             self.async_on_remove(self.hass.bus.async_listen(LIVE_EVENT, self._live_event))
             self.async_on_remove(self.hass.bus.async_listen(CALIBRATING_EVENT, self._calibrating_event))
+            tracker = self.hass.data.get(TRACKER_KEY)
+            remaining = tracker.calibration_remaining(self._source) if tracker is not None else 0
+            if isinstance(remaining, (int, float)) and remaining > 0:
+                self._schedule_calibration_refresh(remaining)
         elif self._endpoint_followup is not None and (source := self.hass.states.get(self._source)) is not None:
             await self._finish_endpoint_reversal(
                 Event("state_changed", {"entity_id": self._source, "old_state": source, "new_state": source})
@@ -154,13 +158,16 @@ class ShadeCover(CoverEntity):
         self.async_write_ha_state()
         secs = event.data.get("seconds") or 0
         if secs > 0:
-            # Refresh once when the lock expires so `calibrating` clears itself
-            # even if no more live events arrive after the shade settles.
-            @callback
-            def _refresh(_now) -> None:
-                self.async_write_ha_state()
+            self._schedule_calibration_refresh(secs)
 
-            async_call_later(self.hass, secs + 1, _refresh)
+    def _schedule_calibration_refresh(self, seconds: float) -> None:
+        """Refresh once after a calibration lock expires."""
+
+        @callback
+        def _refresh(_now) -> None:
+            self.async_write_ha_state()
+
+        async_call_later(self.hass, seconds + 1, _refresh)
 
     def _is_calibrating(self) -> bool:
         """Whether this shade is locked mid-calibration."""
@@ -409,6 +416,7 @@ class ShadeCover(CoverEntity):
     async def async_clear_override(self) -> None:
         """Return this shade to automatic group moves."""
         if manager := self._override_manager():
+            manager.cancel_source_moves(self._source)
             if self.is_opening or self.is_closing:
                 # Resume means the current manual movement may finish without
                 # immediately recreating the override on its next update.

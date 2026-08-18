@@ -179,6 +179,34 @@ async def test_untracked_close_reverses_opening_via_nudge(hass: HomeAssistant) -
     cover._cancel_optimistic_timer()
 
 
+async def test_untracked_restart_finishes_persisted_endpoint_followup(hass: HomeAssistant) -> None:
+    """A restart at the RYSE nudge position still sends the final endpoint."""
+    source = SHADES["mbr1"]
+    cover = ShadeCover("mbr1", source, tracked=False)
+    cover.hass = hass
+    cover.async_on_remove = MagicMock()
+    manager = MagicMock()
+    manager.source_followup.return_value = 0
+    hass.data[OVERRIDE_MANAGER_KEY] = manager
+    hass.states.async_set(source, "open", {"current_position": 1, "friendly_name": source})
+    service_call = AsyncMock()
+
+    with (
+        patch("custom_components.shade_dashboard.cover.async_track_state_change_event", return_value=MagicMock()),
+        patch.object(type(hass.services), "async_call", service_call),
+    ):
+        await cover.async_added_to_hass()
+
+    service_call.assert_awaited_once_with(
+        "cover",
+        "close_cover",
+        {"entity_id": source},
+        blocking=False,
+    )
+    manager.set_source_followup.assert_called_with(source, None)
+    manager.expect_source_move.assert_called_with(source, 0)
+
+
 async def test_duplicate_user_command_during_ryse_followup_sets_override() -> None:
     """Suppressing a duplicate hardware command must not suppress manual intent."""
     source = SHADES["mbr1"]
