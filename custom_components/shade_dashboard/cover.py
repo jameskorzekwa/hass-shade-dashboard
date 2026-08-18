@@ -130,9 +130,19 @@ class ShadeCover(CoverEntity):
         self.async_on_remove(self._cancel_optimistic_timer)
         self.async_on_remove(async_track_state_change_event(self.hass, [self._source], self._source_changed))
         self.async_on_remove(self.hass.bus.async_listen(OVERRIDE_EVENT, self._override_event))
+        if not self._tracked and (manager := self._override_manager()):
+            self._endpoint_followup = manager.source_followup(self._source)
         if self._tracked:
             self.async_on_remove(self.hass.bus.async_listen(LIVE_EVENT, self._live_event))
             self.async_on_remove(self.hass.bus.async_listen(CALIBRATING_EVENT, self._calibrating_event))
+            tracker = self.hass.data.get(TRACKER_KEY)
+            remaining = tracker.calibration_remaining(self._source) if tracker is not None else 0
+            if isinstance(remaining, (int, float)) and remaining > 0:
+                self._schedule_calibration_refresh(remaining)
+        elif self._endpoint_followup is not None and (source := self.hass.states.get(self._source)) is not None:
+            await self._finish_endpoint_reversal(
+                Event("state_changed", {"entity_id": self._source, "old_state": source, "new_state": source})
+            )
 
     @callback
     def _override_event(self, event: Event) -> None:
@@ -148,13 +158,16 @@ class ShadeCover(CoverEntity):
         self.async_write_ha_state()
         secs = event.data.get("seconds") or 0
         if secs > 0:
-            # Refresh once when the lock expires so `calibrating` clears itself
-            # even if no more live events arrive after the shade settles.
-            @callback
-            def _refresh(_now) -> None:
-                self.async_write_ha_state()
+            self._schedule_calibration_refresh(secs)
 
-            async_call_later(self.hass, secs + 1, _refresh)
+    def _schedule_calibration_refresh(self, seconds: float) -> None:
+        """Refresh once after a calibration lock expires."""
+
+        @callback
+        def _refresh(_now) -> None:
+            self.async_write_ha_state()
+
+        async_call_later(self.hass, seconds + 1, _refresh)
 
     def _is_calibrating(self) -> bool:
         """Whether this shade is locked mid-calibration."""
@@ -187,6 +200,8 @@ class ShadeCover(CoverEntity):
             self._resolve_meta()
         self._maybe_settle_optimistic()
         if not self._tracked and self._source_moved_externally(event) and (manager := self._override_manager()):
+            self._endpoint_followup = None
+            manager.set_source_followup(self._source, None)
             manager.set_overridden(self.entity_id, True)
         await self._finish_endpoint_reversal(event)
         self.async_write_ha_state()
@@ -203,6 +218,7 @@ class ShadeCover(CoverEntity):
             return
         self._endpoint_followup = None
         if manager := self._override_manager():
+            manager.set_source_followup(self._source, None)
             manager.expect_source_move(self._source, target)
         service = SERVICE_CLOSE_COVER if target == 0 else SERVICE_OPEN_COVER
         await self.hass.services.async_call("cover", service, {"entity_id": self._source}, blocking=False)
@@ -225,6 +241,8 @@ class ShadeCover(CoverEntity):
             self._source,
             previous=int(old_pos),
             current=int(new_pos),
+            direction=1 if new.state == STATE_OPENING else -1 if new.state == STATE_CLOSING else None,
+            settled=new.state not in (STATE_OPENING, STATE_CLOSING),
         )
         return not expected
 
@@ -366,8 +384,11 @@ class ShadeCover(CoverEntity):
         if self._blocked_by_calibration():
             return
         self._mark_manual_override()
+        if self._tracked and (tracker := self.hass.data.get(TRACKER_KEY)):
+            tracker.supersede_source_move(self._source)
         if manager := self._override_manager():
-            manager.expect_source_move(self._source)
+            manager.cancel_source_moves(self._source, kinds={"move", "resume", "stop"})
+            manager.expect_source_move(self._source, kind="stop")
         await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
 
     def _blocked_by_calibration(self) -> bool:
@@ -396,6 +417,15 @@ class ShadeCover(CoverEntity):
     async def async_clear_override(self) -> None:
         """Return this shade to automatic group moves."""
         if manager := self._override_manager():
+            manager.cancel_source_moves(self._source, kinds={"resume", "stop"})
+            if self.is_opening or self.is_closing:
+                # Resume means the current manual movement may finish without
+                # immediately recreating the override on its next update.
+                manager.expect_source_move(
+                    self._source,
+                    direction=1 if self.is_opening else -1,
+                    kind="resume",
+                )
             manager.set_overridden(self.entity_id, False)
 
     def _override_manager(self):
@@ -412,11 +442,15 @@ class ShadeCover(CoverEntity):
         """Route a movement to the real device, holding position until it moves."""
         if self._blocked_by_calibration():
             return
+        self._mark_manual_override()
         if self._endpoint_followup == target:
             return
-        self._endpoint_followup = None
-        self._mark_manual_override()
         manager = self._override_manager()
+        if self._endpoint_followup is not None and manager is not None:
+            manager.set_source_followup(self._source, None)
+        self._endpoint_followup = None
+        if self._tracked and (tracker := self.hass.data.get(TRACKER_KEY)):
+            tracker.supersede_source_move(self._source)
         if manager is not None:
             manager.expect_source_move(self._source, target)
         # For tracked shades with no live reading yet (only right after a
@@ -464,5 +498,6 @@ class ShadeCover(CoverEntity):
             service = SERVICE_SET_COVER_POSITION
             data = {"entity_id": self._source, ATTR_POSITION: target}
         if self._endpoint_followup is not None and manager is not None:
+            manager.set_source_followup(self._source, self._endpoint_followup)
             manager.expect_source_move(self._source, data[ATTR_POSITION])
         await self.hass.services.async_call("cover", service, data, blocking=False)

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.shade_dashboard.const import abstract_entity
+from custom_components.shade_dashboard.const import SHADES, abstract_entity
 from custom_components.shade_dashboard.overrides import OverrideManager
 
 
@@ -24,9 +24,38 @@ async def test_override_survives_manager_reload(hass: HomeAssistant) -> None:
     assert restored.is_overridden(entity)
 
 
+async def test_expected_move_survives_manager_reload(hass: HomeAssistant) -> None:
+    """An automatic move in progress remains attributed across an HA restart."""
+    source = SHADES["u1"]
+    manager = OverrideManager(hass)
+    await manager.async_load()
+    manager.expect_source_move(source, 0)
+    await manager._store.async_save(manager._data_to_save())
+
+    restored = OverrideManager(hass)
+    await restored.async_load()
+
+    assert restored.source_move_is_expected(source, previous=100, current=80)
+
+
+async def test_ryse_endpoint_followup_survives_manager_reload(hass: HomeAssistant) -> None:
+    """Restarting after a RYSE nudge preserves its required final endpoint."""
+    source = SHADES["mbr1"]
+    manager = OverrideManager(hass)
+    await manager.async_load()
+    manager.set_source_followup(source, 0)
+    await manager._store.async_save(manager._data_to_save())
+
+    restored = OverrideManager(hass)
+    await restored.async_load()
+
+    assert restored.source_followup(source) == 0
+
+
 async def test_expected_move_survives_sparse_position_updates(hass: HomeAssistant) -> None:
     """A gateway pause mid-travel does not turn the next update into manual motion."""
     manager = OverrideManager(hass)
+    manager._schedule_save = MagicMock()
     source = "cover.source"
     with patch(
         "custom_components.shade_dashboard.overrides.time.monotonic",
@@ -42,6 +71,7 @@ async def test_expected_move_survives_sparse_position_updates(hass: HomeAssistan
 async def test_reversing_automatic_move_is_manual(hass: HomeAssistant) -> None:
     """Motion away from the commanded target clears attribution immediately."""
     manager = OverrideManager(hass)
+    manager._schedule_save = MagicMock()
     source = "cover.source"
     manager.expect_source_move(source, 0)
 
@@ -49,9 +79,172 @@ async def test_reversing_automatic_move_is_manual(hass: HomeAssistant) -> None:
     assert not manager.source_move_is_expected(source, previous=60, current=70)
 
 
+async def test_overlapping_automatic_reversal_keeps_both_directions_expected(hass: HomeAssistant) -> None:
+    """Queued motion from an old target remains automatic while its replacement takes hold."""
+    manager = OverrideManager(hass)
+    manager._schedule_save = MagicMock()
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    assert manager.source_move_is_expected(source, previous=100, current=70)
+
+    manager.expect_source_move(source, 100)
+
+    assert manager.source_move_is_expected(source, previous=70, current=60)
+    assert manager.source_move_is_expected(source, previous=60, current=65)
+
+
+async def test_motion_away_from_all_automatic_targets_is_manual(hass: HomeAssistant) -> None:
+    """Overlapping targets do not hide motion that heads away from every one."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 50)
+
+    assert not manager.source_move_is_expected(source, previous=40, current=70)
+
+
+async def test_arriving_at_latest_target_retires_superseded_target(hass: HomeAssistant) -> None:
+    """A completed replacement command cannot hide a later manual reversal."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+
+    assert manager.source_move_is_expected(source, previous=80, current=100)
+    assert not manager.source_move_is_expected(source, previous=100, current=80)
+
+
+async def test_reissued_old_target_becomes_latest(hass: HomeAssistant) -> None:
+    """A/B/A command ordering retires B when the final A arrives."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+    manager.expect_source_move(source, 0)
+
+    assert manager.source_move_is_expected(source, previous=20, current=0)
+    assert not manager.source_move_is_expected(source, previous=0, current=20)
+
+
+async def test_rejected_latest_duplicate_preserves_older_accepted_target(hass: HomeAssistant) -> None:
+    """Rejecting final A in A/B/A keeps the first accepted A attributable."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+    manager.expect_source_move(source, 0)
+
+    manager.cancel_source_move(source, 0)
+
+    assert manager.source_move_is_expected(source, previous=100, current=80)
+
+
+async def test_resume_cleanup_preserves_target_and_calibration_moves(hass: HomeAssistant) -> None:
+    """Resume removes stop/resume wildcards without erasing real command ownership."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, kind="calibration")
+    manager.expect_source_move(source, kind="stop")
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    manager.cancel_source_moves(source, kinds={"resume", "stop"})
+
+    assert {move.kind for move in manager._expected_sources[source]} == {"move", "calibration"}
+
+
+async def test_gateway_arrival_tolerance_retires_superseded_target(hass: HomeAssistant) -> None:
+    """A verified 94% endpoint retires an older close target."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+
+    assert manager.source_move_is_expected(source, previous=80, current=94, arrival_tolerance=8)
+    assert not manager.source_move_is_expected(source, previous=94, current=80, arrival_tolerance=8)
+
+
+async def test_resume_attribution_only_allows_current_direction(hass: HomeAssistant) -> None:
+    """Resume lets the active movement finish but a rapid reversal is manual."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    assert manager.source_move_is_expected(source, previous=100, current=80)
+    assert not manager.source_move_is_expected(source, previous=80, current=90)
+
+
+async def test_resume_stale_position_opposite_direction_is_manual(hass: HomeAssistant) -> None:
+    """Direction-only RYSE reports cannot compare a None target with a position."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    assert not manager.source_move_is_expected(source, previous=80, current=80, direction=1)
+
+
+async def test_resume_settlement_retires_direction_attribution(hass: HomeAssistant) -> None:
+    """A later same-direction manual move is not hidden after resume settles."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    assert manager.source_move_is_expected(source, previous=80, current=40, settled=True)
+    assert not manager.source_move_is_expected(source, previous=40, current=20)
+
+
+async def test_calibration_progress_does_not_extend_persisted_lock(hass: HomeAssistant) -> None:
+    """Attribution may slide, but restart restores only the original lock period."""
+    manager = OverrideManager(hass)
+    source = SHADES["u1"]
+    manager.expect_source_move(
+        source,
+        seconds=240,
+        kind="calibration",
+        restore_seconds=240,
+    )
+    attribution_expiry = manager._expected_sources[source][0].expires
+    restore_expiry = manager._expected_sources[source][0].restore_expires_at
+
+    assert manager.source_move_is_expected(source, previous=100, current=50)
+    assert manager._expected_sources[source][0].expires == attribution_expiry
+    assert manager._expected_sources[source][0].restore_expires_at == restore_expiry
+
+
+async def test_rejected_calibration_preserves_other_command(hass: HomeAssistant) -> None:
+    """Cancelling calibration cannot disown an earlier accepted movement."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, kind="calibration")
+
+    manager.cancel_source_move(source, None, kind="calibration")
+
+    assert manager.source_move_is_expected(source, previous=100, current=80)
+
+
+async def test_stale_ryse_position_uses_reported_direction(hass: HomeAssistant) -> None:
+    """RYSE opening state overrides an automatic close even while position stays stale."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+
+    assert not manager.source_move_is_expected(source, previous=100, current=100, direction=1)
+
+
+async def test_ryse_settling_short_of_automatic_target_is_manual(hass: HomeAssistant) -> None:
+    """A same-direction stop or retarget cannot remain attributed as automatic."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+
+    assert not manager.source_move_is_expected(source, previous=100, current=40, settled=True)
+
+
 async def test_late_duplicate_transition_remains_automatic(hass: HomeAssistant) -> None:
     """A delayed endpoint replay stays attributed after the latest progress."""
     manager = OverrideManager(hass)
+    manager._schedule_save = MagicMock()
     source = "cover.source"
     with patch(
         "custom_components.shade_dashboard.overrides.time.monotonic",
@@ -68,6 +261,7 @@ async def test_late_duplicate_transition_remains_automatic(hass: HomeAssistant) 
 async def test_delayed_automatic_move_does_not_set_override_at_endpoint(hass: HomeAssistant) -> None:
     """Progress renews attribution when a queued gateway move outlasts its command window."""
     manager = OverrideManager(hass)
+    manager._schedule_save = MagicMock()
     source = "cover.source"
     with patch(
         "custom_components.shade_dashboard.overrides.time.monotonic",

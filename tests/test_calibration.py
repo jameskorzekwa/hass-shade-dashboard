@@ -9,6 +9,7 @@ import pytest
 from custom_components.shade_dashboard.const import (
     CALIBRATE_EVENT,
     CALIBRATE_HEX,
+    OVERRIDE_MANAGER_KEY,
     TRACKER_KEY,
 )
 from custom_components.shade_dashboard.cover import ShadeCover
@@ -179,8 +180,43 @@ async def test_recalibrate_unlocks_on_gateway_rejection() -> None:
     t._entity_to_ble = {"cover.x": "DUE:A6C5"}
     _mock_post(t, {"err": 4, "errMsg": "nope"})
     t.hass = MagicMock()
+    manager = MagicMock()
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
     assert await t.async_recalibrate("cover.x") is False
     assert t.is_calibrating("cover.x") is False
+    manager.cancel_source_move.assert_called_once_with("cover.x", None, kind="calibration")
+
+
+async def test_start_restores_persisted_calibration_lock() -> None:
+    """Restarting HA cannot unlock a calibration still moving the hardware."""
+    t = _tracker()
+    manager = MagicMock()
+    manager.active_moves.return_value = [("cover.x", 200)]
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
+    t._build_map = AsyncMock()
+    t.hass.loop.create_task = MagicMock()
+    t._run = MagicMock(return_value=MagicMock())
+
+    await t.start()
+
+    assert t.is_calibrating("cover.x") is True
+    manager.active_moves.assert_called_once_with("calibration")
+
+
+async def test_cover_schedules_refresh_for_restored_calibration_lock() -> None:
+    """A cover added after lock restoration still refreshes at expiry."""
+    cover = ShadeCover("ko1", "cover.kyle_s_office_shade_1", tracked=True)
+    tracker = MagicMock()
+    tracker.calibration_remaining.return_value = 120
+    cover.hass = MagicMock()
+    cover.hass.data = {TRACKER_KEY: tracker}
+    cover.async_on_remove = MagicMock()
+    cover._schedule_calibration_refresh = MagicMock()
+
+    with patch("custom_components.shade_dashboard.cover.async_track_state_change_event", return_value=MagicMock()):
+        await cover.async_added_to_hass()
+
+    cover._schedule_calibration_refresh.assert_called_once_with(120)
 
 
 async def test_cover_blocks_commands_while_calibrating() -> None:

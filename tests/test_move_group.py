@@ -18,13 +18,14 @@ from custom_components.shade_dashboard.const import (
     TRACKER_KEY,
     abstract_entity,
 )
-from custom_components.shade_dashboard.gateway import GatewayTracker
+from custom_components.shade_dashboard.gateway import GatewayTracker, _shade_position
 
 
 def _verify_tracker(available: bool = True) -> GatewayTracker:
     t = _tracker()
     t._entity_to_id = {"cover.a": 1, "cover.b": 2}
     t.hass = MagicMock()
+    t.hass.data = {}
     t.hass.states.get.return_value = None if available else _unavail()
     t.hass.services.async_call = AsyncMock()
     t._put_positions = AsyncMock(return_value=True)
@@ -87,6 +88,19 @@ async def test_move_group_no_gateway_members_no_call() -> None:
     put = _mock_put(t)
     assert await t.async_move_group(["cover.x"], 1.0) is False
     put.assert_not_called()
+
+
+async def test_fire_and_forget_rejection_cancels_attribution() -> None:
+    """A definitive HTTP rejection cannot hide a later manual movement."""
+    t = _tracker()
+    t._entity_to_id = {"cover.a": 1}
+    t._put_positions = AsyncMock(return_value=False)
+    manager = MagicMock()
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
+
+    assert await t.async_move_group(["cover.a"], 0.0) is False
+
+    manager.cancel_source_move.assert_called_once_with("cover.a", 0)
 
 
 async def test_service_splits_tracked_and_untracked() -> None:
@@ -152,6 +166,7 @@ async def test_service_dispatches_untracked_before_verified_wait() -> None:
 async def test_move_group_service_is_awaited_end_to_end(hass: HomeAssistant) -> None:
     """Calling the service via HA's dispatch actually runs it (regression: a
     lambda handler returned an un-awaited coroutine -> silent no-op)."""
+    hass.states.async_set(SHADES["ko1"], "open", {"current_position": 100})
     entry = MockConfigEntry(domain=DOMAIN, data={})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -197,6 +212,31 @@ async def test_verified_move_straggler_recovers_on_retry() -> None:
     t.hass.services.async_call.assert_not_awaited()
 
 
+async def test_new_command_cancels_stale_verified_retry() -> None:
+    """An older verifier cannot retry over a newer opposite command."""
+    t = _verify_tracker()
+    t._entity_to_id = {"cover.a": 1}
+    t.hass.data = {}
+    waiting = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wait_settled(_ids, _target):
+        waiting.set()
+        await release.wait()
+        return {1: 40}
+
+    t._wait_settled = AsyncMock(side_effect=wait_settled)
+    old_move = asyncio.create_task(t.async_move_group_verified(["cover.a"], 0.0))
+    await asyncio.wait_for(waiting.wait(), timeout=1)
+
+    await t.async_move_group(["cover.a"], 1.0)
+    release.set()
+
+    assert await old_move == []
+    assert [call.args[1] for call in t._put_positions.await_args_list] == [0.0, 1.0]
+    t.hass.services.async_call.assert_not_awaited()
+
+
 async def test_verified_move_persistent_failure_notifies() -> None:
     """A shade that never arrives (even after retry) -> event + notification."""
     t = _verify_tracker()
@@ -207,6 +247,54 @@ async def test_verified_move_persistent_failure_notifies() -> None:
     assert t.hass.bus.async_fire.call_args.args[0] == MOVE_FAILED_EVENT
     assert t.hass.bus.async_fire.call_args.args[1]["entities"] == ["cover.b"]
     t.hass.services.async_call.assert_awaited()  # persistent_notification
+
+
+async def test_unconfirmed_put_failure_never_recalibrates() -> None:
+    """A communication failure is not evidence that healthy shade limits drifted."""
+    t = _verify_tracker()
+    t._entity_to_id = {"cover.a": 1}
+    t._put_positions = AsyncMock(return_value=None)
+    t._wait_settled = AsyncMock(side_effect=[{1: 40}, {1: 40}])
+    t.async_recalibrate = AsyncMock(return_value=True)
+    manager = MagicMock()
+    manager.is_source_overridden.return_value = False
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
+
+    assert await t.async_move_group_verified(["cover.a"], 1.0) == ["cover.a"]
+
+    t.async_recalibrate.assert_not_awaited()
+    assert manager.cancel_source_move.call_count >= 1
+    message = t.hass.services.async_call.await_args.args[2]["message"]
+    assert "did not confirm either command" in message
+
+
+async def test_member_becoming_unavailable_is_not_retried_or_failed() -> None:
+    """An outage during verification removes that shade from the operation."""
+    t = _verify_tracker()
+    t._entity_to_id = {"cover.a": 1}
+    source_state = MagicMock(state="open")
+    t.hass.states.get.return_value = source_state
+
+    async def become_unavailable(_ids, _target):
+        source_state.state = "unavailable"
+        return {}
+
+    t._wait_settled = AsyncMock(side_effect=become_unavailable)
+
+    assert await t.async_move_group_verified(["cover.a"], 0.0) == []
+    assert t._put_positions.await_count == 1
+    t.hass.services.async_call.assert_not_awaited()
+
+
+async def test_verification_read_recovers_from_transient_error() -> None:
+    """One failed GET does not abort verification after a command was issued."""
+    t = _tracker()
+    t._read_positions = AsyncMock(side_effect=[RuntimeError("temporary"), {1: 100}])
+    with (
+        patch("custom_components.shade_dashboard.gateway.asyncio.sleep", new=AsyncMock()),
+        patch("custom_components.shade_dashboard.gateway.time.monotonic", side_effect=[0, 1, 2, 7]),
+    ):
+        assert await t._wait_settled([1], 100) == {1: 100}
 
 
 async def test_single_verified_failure_starts_recalibration() -> None:
@@ -259,6 +347,7 @@ async def test_verified_move_skips_unavailable_members() -> None:
     t = _tracker()
     t._entity_to_id = {"cover.a": 1, "cover.b": 2}
     t.hass = MagicMock()
+    t.hass.data = {}
     t.hass.states.get.side_effect = lambda e: _unavail() if e == "cover.a" else None
     t.hass.services.async_call = AsyncMock()
     t._put_positions = AsyncMock(return_value=True)
@@ -329,6 +418,49 @@ async def test_manual_group_move_sets_each_override() -> None:
         (abstract_entity("ko1"), True),
         (abstract_entity("ko2"), True),
     ]
+    tracker.async_move_group_verified.assert_awaited_once()
+    assert tracker.async_move_group_verified.await_args.args[0] == [SHADES["ko1"], SHADES["ko2"]]
+
+
+async def test_manual_group_move_skips_unavailable_member() -> None:
+    """A shade that cannot receive a dashboard command is not overridden."""
+    hass = MagicMock()
+    tracker = MagicMock()
+    tracker.has_gateway_id.return_value = True
+    tracker.async_move_group_verified = AsyncMock()
+    overrides = MagicMock()
+    unavailable = abstract_entity("ko1")
+    available = abstract_entity("ko2")
+    hass.states.get.side_effect = lambda entity: MagicMock(state="unavailable" if entity == unavailable else "open")
+    hass.data = {TRACKER_KEY: tracker, OVERRIDE_MANAGER_KEY: overrides}
+    call = MagicMock()
+    call.context = Context()
+    call.data = {"entity_id": [unavailable, available], "position": 100}
+
+    await _async_move_group(hass, call)
+
+    overrides.set_overridden.assert_called_once_with(available, True)
+    assert tracker.async_move_group_verified.await_args.args[0] == [SHADES["ko2"]]
+
+
+async def test_manual_group_move_skips_calibrating_member() -> None:
+    """A locked shade is neither commanded nor overridden by a group action."""
+    hass = MagicMock()
+    tracker = MagicMock()
+    tracker.has_gateway_id.return_value = True
+    tracker.is_calibrating.side_effect = lambda source: source == SHADES["ko1"]
+    tracker.async_move_group_verified = AsyncMock()
+    overrides = MagicMock()
+    hass.states.get.return_value = MagicMock(state="open")
+    hass.data = {TRACKER_KEY: tracker, OVERRIDE_MANAGER_KEY: overrides}
+    call = MagicMock()
+    call.context = Context()
+    call.data = {"entity_id": [abstract_entity("ko1"), abstract_entity("ko2")], "position": 100}
+
+    await _async_move_group(hass, call)
+
+    overrides.set_overridden.assert_called_once_with(abstract_entity("ko2"), True)
+    assert tracker.async_move_group_verified.await_args.args[0] == [SHADES["ko2"]]
 
 
 async def test_gateway_hardware_move_sets_override() -> None:
@@ -344,6 +476,12 @@ async def test_gateway_hardware_move_sets_override() -> None:
 
     await tracker._poll_once()
 
+    overrides.set_source_overridden.assert_not_called()
+    assert tracker._command_generation["cover.a"] == 1
+
+    tracker._get.return_value = [{"id": 1, "positions": {"primary": 0.6}}]
+    await tracker._poll_once()
+
     overrides.set_source_overridden.assert_called_once_with("cover.a")
 
 
@@ -352,6 +490,7 @@ async def test_gateway_poll_error_discards_stale_override_baseline() -> None:
     tracker = _tracker()
     tracker._id_to_entity = {1: "cover.a"}
     tracker._prev_pos = {"cover.a": 100}
+    tracker._manual_candidates = {"cover.a": (100, 80)}
 
     async def fail_poll() -> None:
         tracker._stop.set()
@@ -360,6 +499,7 @@ async def test_gateway_poll_error_discards_stale_override_baseline() -> None:
     tracker._poll_once = fail_poll
     await tracker._run()
     assert tracker._prev_pos == {}
+    assert tracker._manual_candidates == {}
 
     tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.0}}])
     tracker._maybe_check_calibration = AsyncMock()
@@ -398,6 +538,78 @@ async def test_gateway_unavailable_source_discards_reconnect_positions() -> None
     overrides.set_source_overridden.assert_not_called()
 
 
+async def test_gateway_zero_spike_before_unavailable_never_overrides() -> None:
+    """A reconnect spike cannot win a race with the source unavailable state."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a"}
+    tracker._prev_pos = {"cover.a": 100}
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.0}}])
+    tracker._maybe_check_calibration = AsyncMock()
+    source_state = MagicMock(state="open")
+    tracker.hass.states.get.return_value = source_state
+    overrides = MagicMock()
+    overrides.source_move_is_expected.return_value = False
+    tracker.hass.data = {OVERRIDE_MANAGER_KEY: overrides}
+
+    await tracker._poll_once()
+    overrides.set_source_overridden.assert_not_called()
+
+    source_state.state = "unavailable"
+    await tracker._poll_once()
+    assert tracker._manual_candidates == {}
+
+    source_state.state = "open"
+    tracker._get.return_value = [{"id": 1, "positions": {"primary": 1.0}}]
+    await tracker._poll_once()
+
+    assert tracker._prev_pos == {"cover.a": 100}
+    overrides.set_source_overridden.assert_not_called()
+
+
+async def test_partial_snapshot_only_overrides_confirmed_mover() -> None:
+    """A missing member gets a baseline while another real movement is confirmed."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a", 2: "cover.b"}
+    tracker._prev_pos = {"cover.a": 100, "cover.b": 100}
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.8}}])
+    tracker._maybe_check_calibration = AsyncMock()
+    tracker.hass.states.get.return_value = MagicMock(state="open")
+    overrides = MagicMock()
+    overrides.source_move_is_expected.return_value = False
+    tracker.hass.data = {OVERRIDE_MANAGER_KEY: overrides}
+
+    await tracker._poll_once()
+
+    tracker._get.return_value = [
+        {"id": 1, "positions": {"primary": 0.6}},
+        {"id": 2, "positions": {"primary": 1.0}},
+    ]
+    await tracker._poll_once()
+
+    overrides.set_source_overridden.assert_called_once_with("cover.a")
+    assert tracker._prev_pos == {"cover.a": 60, "cover.b": 100}
+
+
+async def test_automatic_command_cancels_unconfirmed_manual_candidate() -> None:
+    """A command arriving between two polls takes ownership of the movement."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a"}
+    tracker._prev_pos = {"cover.a": 100}
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.8}}])
+    tracker._maybe_check_calibration = AsyncMock()
+    tracker.hass.states.get.return_value = MagicMock(state="open")
+    overrides = MagicMock()
+    overrides.source_move_is_expected.side_effect = [False, True]
+    tracker.hass.data = {OVERRIDE_MANAGER_KEY: overrides}
+
+    await tracker._poll_once()
+    tracker._get.return_value = [{"id": 1, "positions": {"primary": 0.6}}]
+    await tracker._poll_once()
+
+    assert tracker._manual_candidates == {}
+    overrides.set_source_overridden.assert_not_called()
+
+
 async def test_gateway_missing_position_discards_stale_baseline() -> None:
     """An incomplete successful response is an outage, not a move to zero."""
     tracker = _tracker()
@@ -414,6 +626,24 @@ async def test_gateway_missing_position_discards_stale_baseline() -> None:
 
     assert tracker._prev_pos == {}
     overrides.set_source_overridden.assert_not_called()
+
+
+def test_gateway_rejects_malformed_positions() -> None:
+    """Boolean, nonnumeric, and out-of-range readings cannot become positions."""
+    for primary in (None, True, False, "0.5", -0.01, 1.01):
+        assert _shade_position({"positions": {"primary": primary}}) is None
+    assert _shade_position({"positions": {"primary": 0.0}}) == 0
+    assert _shade_position({"positions": {"primary": 1.0}}) == 100
+
+
+async def test_verification_ignores_unavailable_source_position() -> None:
+    """Reconnect data cannot make a verified move look successful."""
+    tracker = _tracker()
+    tracker._id_to_entity = {1: "cover.a"}
+    tracker._get = AsyncMock(return_value=[{"id": 1, "positions": {"primary": 0.0}}])
+    tracker.hass.states.get.return_value = MagicMock(state="unavailable")
+
+    assert await tracker._read_positions([1]) == {}
 
 
 def test_group_entities_resolution() -> None:
@@ -436,6 +666,8 @@ async def test_move_group_service_accepts_group(hass: HomeAssistant) -> None:
     """A named group resolves to its covers through HA's dispatch."""
     from custom_components.shade_dashboard.const import SHADES
 
+    for slot in ("u1", "u2", "u3", "l1", "l2"):
+        hass.states.async_set(SHADES[slot], "open", {"current_position": 100})
     entry = MockConfigEntry(domain=DOMAIN, data={})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
