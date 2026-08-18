@@ -272,6 +272,7 @@ async def test_resume_during_motion_does_not_immediately_recreate_override() -> 
 
     await cover.async_clear_override()
 
+    manager.cancel_source_moves.assert_called_once_with(source, kinds={"resume", "stop"})
     manager.expect_source_move.assert_called_once_with(source, direction=-1, kind="resume")
     manager.set_overridden.assert_called_once_with(cover.entity_id, False)
 

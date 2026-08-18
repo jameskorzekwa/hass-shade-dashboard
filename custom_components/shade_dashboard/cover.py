@@ -387,7 +387,7 @@ class ShadeCover(CoverEntity):
         if self._tracked and (tracker := self.hass.data.get(TRACKER_KEY)):
             tracker.supersede_source_move(self._source)
         if manager := self._override_manager():
-            manager.expect_source_move(self._source)
+            manager.expect_source_move(self._source, kind="stop")
         await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
 
     def _blocked_by_calibration(self) -> bool:
@@ -416,7 +416,7 @@ class ShadeCover(CoverEntity):
     async def async_clear_override(self) -> None:
         """Return this shade to automatic group moves."""
         if manager := self._override_manager():
-            manager.cancel_source_moves(self._source)
+            manager.cancel_source_moves(self._source, kinds={"resume", "stop"})
             if self.is_opening or self.is_closing:
                 # Resume means the current manual movement may finish without
                 # immediately recreating the override on its next update.

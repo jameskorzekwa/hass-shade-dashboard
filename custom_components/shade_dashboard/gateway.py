@@ -286,9 +286,7 @@ class GatewayTracker:
             pending = {
                 entity: gateway_id
                 for entity, gateway_id in pending.items()
-                if self._command_generation.get(entity) == claims[entity]
-                and self._source_is_movable(entity)
-                and not (manager is not None and manager.is_source_overridden(entity))
+                if self._command_generation.get(entity) == claims[entity] and self._source_is_movable(entity)
             }
             if not pending:
                 break
@@ -306,7 +304,6 @@ class GatewayTracker:
                 for entity, gateway_id in pending.items()
                 if self._command_generation.get(entity) == claims[entity]
                 and self._source_is_movable(entity)
-                and not (manager is not None and manager.is_source_overridden(entity))
                 and abs(final.get(gateway_id, -999) - target) > MOVE_TOLERANCE
             }
             if not pending:

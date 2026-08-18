@@ -126,6 +126,33 @@ async def test_reissued_old_target_becomes_latest(hass: HomeAssistant) -> None:
     assert not manager.source_move_is_expected(source, previous=0, current=20)
 
 
+async def test_rejected_latest_duplicate_preserves_older_accepted_target(hass: HomeAssistant) -> None:
+    """Rejecting final A in A/B/A keeps the first accepted A attributable."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+    manager.expect_source_move(source, 0)
+
+    manager.cancel_source_move(source, 0)
+
+    assert manager.source_move_is_expected(source, previous=100, current=80)
+
+
+async def test_resume_cleanup_preserves_target_and_calibration_moves(hass: HomeAssistant) -> None:
+    """Resume removes stop/resume wildcards without erasing real command ownership."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, kind="calibration")
+    manager.expect_source_move(source, kind="stop")
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    manager.cancel_source_moves(source, kinds={"resume", "stop"})
+
+    assert {move.kind for move in manager._expected_sources[source]} == {"move", "calibration"}
+
+
 async def test_gateway_arrival_tolerance_retires_superseded_target(hass: HomeAssistant) -> None:
     """A verified 94% endpoint retires an older close target."""
     manager = OverrideManager(hass)

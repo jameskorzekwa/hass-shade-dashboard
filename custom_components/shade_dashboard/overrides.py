@@ -110,11 +110,6 @@ class OverrideManager:
         """Return whether an abstract shade is excluded from automation."""
         return entity_id in self._overrides
 
-    def is_source_overridden(self, source_entity: str) -> bool:
-        """Return whether a real source cover is excluded from automation."""
-        entity_id = self._source_to_abstract.get(source_entity)
-        return entity_id is not None and entity_id in self._overrides
-
     def set_overridden(self, entity_id: str, overridden: bool) -> None:
         """Update one override and notify its cover entity."""
         if overridden:
@@ -150,18 +145,6 @@ class OverrideManager:
         now = time.monotonic()
         now_at = time.time()
         expected_moves = [move for move in self._expected_sources.get(source_entity, ()) if now < move.expires]
-        for move in expected_moves:
-            if move.target == target and move.direction == direction and move.kind == kind:
-                move.expires = now + seconds
-                move.expires_at = now_at + seconds
-                move.attribution_seconds = seconds
-                if restore_seconds is not None:
-                    move.restore_expires_at = now_at + restore_seconds
-                expected_moves.remove(move)
-                expected_moves.append(move)
-                self._expected_sources[source_entity] = expected_moves
-                self._schedule_save()
-                return
         expected_moves.append(
             _ExpectedMove(
                 expires=now + seconds,
@@ -251,10 +234,22 @@ class OverrideManager:
         self._schedule_save()
         return True
 
-    def cancel_source_moves(self, source_entity: str) -> None:
+    def cancel_source_moves(self, source_entity: str, *, kinds: set[str] | None = None) -> None:
         """Drop attribution for commands known not to have started."""
-        if self._expected_sources.pop(source_entity, None) is not None:
-            self._schedule_save()
+        moves = self._expected_sources.get(source_entity)
+        if not moves:
+            return
+        if kinds is None:
+            self._expected_sources.pop(source_entity, None)
+        else:
+            remaining = [move for move in moves if move.kind not in kinds]
+            if len(remaining) == len(moves):
+                return
+            if remaining:
+                self._expected_sources[source_entity] = remaining
+            else:
+                self._expected_sources.pop(source_entity, None)
+        self._schedule_save()
 
     def cancel_source_move(
         self,
@@ -268,11 +263,18 @@ class OverrideManager:
         moves = self._expected_sources.get(source_entity)
         if not moves:
             return
-        remaining = [
-            move for move in moves if not (move.target == target and move.direction == direction and move.kind == kind)
-        ]
-        if len(remaining) == len(moves):
+        match_index = next(
+            (
+                index
+                for index in range(len(moves) - 1, -1, -1)
+                if moves[index].target == target and moves[index].direction == direction and moves[index].kind == kind
+            ),
+            None,
+        )
+        if match_index is None:
             return
+        remaining = moves.copy()
+        remaining.pop(match_index)
         if remaining:
             self._expected_sources[source_entity] = remaining
         else:

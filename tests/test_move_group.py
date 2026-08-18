@@ -418,6 +418,8 @@ async def test_manual_group_move_sets_each_override() -> None:
         (abstract_entity("ko1"), True),
         (abstract_entity("ko2"), True),
     ]
+    tracker.async_move_group_verified.assert_awaited_once()
+    assert tracker.async_move_group_verified.await_args.args[0] == [SHADES["ko1"], SHADES["ko2"]]
 
 
 async def test_manual_group_move_skips_unavailable_member() -> None:
