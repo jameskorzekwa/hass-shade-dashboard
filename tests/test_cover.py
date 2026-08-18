@@ -137,6 +137,25 @@ async def test_command_routes_to_source() -> None:
     tracker.supersede_source_move.assert_called_once_with(source)
 
 
+async def test_stop_supersedes_prior_target_attribution() -> None:
+    """Stop followed by Resume cannot leave the old destination active."""
+    source = _tracked_entities()[0]
+    slot = next(s for s, entity in SHADES.items() if entity == source)
+    cover = ShadeCover(slot, source, tracked=True)
+    cover.hass = MagicMock()
+    manager = MagicMock()
+    manager.is_automation_context.return_value = False
+    tracker = MagicMock()
+    tracker.is_calibrating.return_value = False
+    cover.hass.data = {OVERRIDE_MANAGER_KEY: manager, TRACKER_KEY: tracker}
+    cover.hass.services.async_call = AsyncMock()
+
+    await cover.async_stop_cover()
+
+    manager.cancel_source_moves.assert_called_once_with(source, kinds={"move", "resume", "stop"})
+    manager.expect_source_move.assert_called_once_with(source, kind="stop")
+
+
 async def test_untracked_close_reverses_opening_via_nudge(hass: HomeAssistant) -> None:
     """RYSE reverses through 1% when its stale 0% position would discard close."""
     source = SHADES["mbr1"]

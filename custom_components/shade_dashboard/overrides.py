@@ -229,6 +229,8 @@ class OverrideManager:
             return False
         now_at = time.time()
         for move in matching:
+            if move.kind == "calibration":
+                continue
             move.expires = now + move.attribution_seconds
             move.expires_at = now_at + move.attribution_seconds
         self._schedule_save()

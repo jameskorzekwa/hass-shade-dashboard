@@ -387,6 +387,7 @@ class ShadeCover(CoverEntity):
         if self._tracked and (tracker := self.hass.data.get(TRACKER_KEY)):
             tracker.supersede_source_move(self._source)
         if manager := self._override_manager():
+            manager.cancel_source_moves(self._source, kinds={"move", "resume", "stop"})
             manager.expect_source_move(self._source, kind="stop")
         await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
 

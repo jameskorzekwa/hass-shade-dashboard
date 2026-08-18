@@ -184,7 +184,7 @@ async def test_recalibrate_unlocks_on_gateway_rejection() -> None:
     t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
     assert await t.async_recalibrate("cover.x") is False
     assert t.is_calibrating("cover.x") is False
-    manager.cancel_source_moves.assert_called_once_with("cover.x")
+    manager.cancel_source_move.assert_called_once_with("cover.x", None, kind="calibration")
 
 
 async def test_start_restores_persisted_calibration_lock() -> None:

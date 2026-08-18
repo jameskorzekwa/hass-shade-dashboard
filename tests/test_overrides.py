@@ -199,14 +199,28 @@ async def test_calibration_progress_does_not_extend_persisted_lock(hass: HomeAss
     source = SHADES["u1"]
     manager.expect_source_move(
         source,
-        seconds=255,
+        seconds=240,
         kind="calibration",
         restore_seconds=240,
     )
+    attribution_expiry = manager._expected_sources[source][0].expires
     restore_expiry = manager._expected_sources[source][0].restore_expires_at
 
     assert manager.source_move_is_expected(source, previous=100, current=50)
+    assert manager._expected_sources[source][0].expires == attribution_expiry
     assert manager._expected_sources[source][0].restore_expires_at == restore_expiry
+
+
+async def test_rejected_calibration_preserves_other_command(hass: HomeAssistant) -> None:
+    """Cancelling calibration cannot disown an earlier accepted movement."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, kind="calibration")
+
+    manager.cancel_source_move(source, None, kind="calibration")
+
+    assert manager.source_move_is_expected(source, previous=100, current=80)
 
 
 async def test_stale_ryse_position_uses_reported_direction(hass: HomeAssistant) -> None:

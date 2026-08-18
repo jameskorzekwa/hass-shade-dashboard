@@ -396,7 +396,7 @@ class GatewayTracker:
         if manager:
             manager.expect_source_move(
                 entity_id,
-                seconds=CALIBRATE_LOCK + 15,
+                seconds=CALIBRATE_LOCK,
                 kind="calibration",
                 restore_seconds=CALIBRATE_LOCK,
             )
@@ -411,13 +411,13 @@ class GatewayTracker:
             if getattr(err, "status", None) is not None:
                 self._set_calibrating(entity_id, 0)
                 if manager:
-                    manager.cancel_source_moves(entity_id)
+                    manager.cancel_source_move(entity_id, None, kind="calibration")
             return False
         ok = isinstance(data, dict) and data.get("err") == 0
         if not ok:
             self._set_calibrating(entity_id, 0)  # unlock — gateway rejected it
             if manager:
-                manager.cancel_source_moves(entity_id)
+                manager.cancel_source_move(entity_id, None, kind="calibration")
         _LOGGER.info("Recalibrate %s (%s): %s", entity_id, ble, "accepted" if ok else data)
         return ok
 
