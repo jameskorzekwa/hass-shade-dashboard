@@ -38,6 +38,20 @@ async def test_expected_move_survives_manager_reload(hass: HomeAssistant) -> Non
     assert restored.source_move_is_expected(source, previous=100, current=80)
 
 
+async def test_ryse_endpoint_followup_survives_manager_reload(hass: HomeAssistant) -> None:
+    """Restarting after a RYSE nudge preserves its required final endpoint."""
+    source = SHADES["mbr1"]
+    manager = OverrideManager(hass)
+    await manager.async_load()
+    manager.set_source_followup(source, 0)
+    await manager._store.async_save(manager._data_to_save())
+
+    restored = OverrideManager(hass)
+    await restored.async_load()
+
+    assert restored.source_followup(source) == 0
+
+
 async def test_expected_move_survives_sparse_position_updates(hass: HomeAssistant) -> None:
     """A gateway pause mid-travel does not turn the next update into manual motion."""
     manager = OverrideManager(hass)
@@ -87,6 +101,27 @@ async def test_motion_away_from_all_automatic_targets_is_manual(hass: HomeAssist
     manager.expect_source_move(source, 50)
 
     assert not manager.source_move_is_expected(source, previous=40, current=70)
+
+
+async def test_arriving_at_latest_target_retires_superseded_target(hass: HomeAssistant) -> None:
+    """A completed replacement command cannot hide a later manual reversal."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, 0)
+    manager.expect_source_move(source, 100)
+
+    assert manager.source_move_is_expected(source, previous=80, current=100)
+    assert not manager.source_move_is_expected(source, previous=100, current=80)
+
+
+async def test_resume_attribution_only_allows_current_direction(hass: HomeAssistant) -> None:
+    """Resume lets the active movement finish but a rapid reversal is manual."""
+    manager = OverrideManager(hass)
+    source = "cover.source"
+    manager.expect_source_move(source, direction=-1, kind="resume")
+
+    assert manager.source_move_is_expected(source, previous=100, current=80)
+    assert not manager.source_move_is_expected(source, previous=80, current=90)
 
 
 async def test_stale_ryse_position_uses_reported_direction(hass: HomeAssistant) -> None:

@@ -27,6 +27,8 @@ class _ExpectedMove:
     expires: float
     expires_at: float
     target: int | None
+    direction: int | None
+    kind: str
     attribution_seconds: float
 
 
@@ -38,6 +40,7 @@ class OverrideManager:
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._overrides: set[str] = set()
         self._expected_sources: dict[str, list[_ExpectedMove]] = {}
+        self._source_followups: dict[str, tuple[int, float]] = {}
         self._automation_contexts: dict[str, float] = {}
         self._source_to_abstract = {source: abstract_entity(slot) for slot, source in SHADES.items()}
 
@@ -66,6 +69,12 @@ class OverrideManager:
                 target = saved.get("target")
                 if target is not None and (not isinstance(target, int) or not 0 <= target <= 100):
                     continue
+                direction = saved.get("direction")
+                if direction not in (None, -1, 1):
+                    continue
+                kind = saved.get("kind", "move")
+                if not isinstance(kind, str):
+                    continue
                 remaining = expires_at - now_at
                 if remaining <= 0 or seconds <= 0:
                     continue
@@ -74,11 +83,23 @@ class OverrideManager:
                         expires=now + remaining,
                         expires_at=expires_at,
                         target=target,
+                        direction=direction,
+                        kind=kind,
                         attribution_seconds=seconds,
                     )
                 )
             if moves:
                 self._expected_sources[source] = moves
+        followups = data.get("followups", {})
+        if isinstance(followups, dict):
+            for source, saved in followups.items():
+                if source not in self._source_to_abstract or not isinstance(saved, dict):
+                    continue
+                target = saved.get("target")
+                expires_at = saved.get("expires_at")
+                if target not in (0, 100) or not isinstance(expires_at, (int, float)) or expires_at <= now_at:
+                    continue
+                self._source_followups[source] = (target, float(expires_at))
 
     def is_overridden(self, entity_id: str) -> bool:
         """Return whether an abstract shade is excluded from automation."""
@@ -111,13 +132,15 @@ class OverrideManager:
         target: int | None = None,
         *,
         seconds: float = EXPECTED_MOVE_SECONDS,
+        direction: int | None = None,
+        kind: str = "move",
     ) -> None:
         """Suppress hardware-movement detection for an integration-issued move."""
         now = time.monotonic()
         now_at = time.time()
         expected_moves = [move for move in self._expected_sources.get(source_entity, ()) if now < move.expires]
         for move in expected_moves:
-            if move.target == target:
+            if move.target == target and move.direction == direction and move.kind == kind:
                 move.expires = now + seconds
                 move.expires_at = now_at + seconds
                 move.attribution_seconds = seconds
@@ -129,6 +152,8 @@ class OverrideManager:
                 expires=now + seconds,
                 expires_at=now_at + seconds,
                 target=target,
+                direction=direction,
+                kind=kind,
                 attribution_seconds=seconds,
             )
         )
@@ -155,6 +180,12 @@ class OverrideManager:
         if previous is None or current is None:
             return True
 
+        latest = expected_moves[-1]
+        if len(expected_moves) > 1 and latest.target is not None and abs(latest.target - current) <= ARRIVAL_EPS:
+            expected_moves = [latest]
+            self._expected_sources[source_entity] = expected_moves
+            self._schedule_save()
+
         delta = current - previous
         if settled and not any(
             move.target is None or abs(move.target - current) <= ARRIVAL_EPS for move in expected_moves
@@ -165,16 +196,18 @@ class OverrideManager:
         if abs(delta) <= DIRECTION_EPS and direction is None:
             return True
         if abs(delta) > DIRECTION_EPS:
+            actual_direction = 1 if delta > 0 else -1
             matching = [
                 move
                 for move in expected_moves
-                if move.target is None or abs(move.target - current) <= abs(move.target - previous)
+                if (move.target is None and (move.direction is None or move.direction == actual_direction))
+                or (move.target is not None and abs(move.target - current) <= abs(move.target - previous))
             ]
         else:
             matching = [
                 move
                 for move in expected_moves
-                if move.target is None
+                if (move.target is None and (move.direction is None or move.direction == direction))
                 or (direction > 0 and move.target > previous)
                 or (direction < 0 and move.target < previous)
             ]
@@ -196,6 +229,37 @@ class OverrideManager:
         """Drop attribution for commands known not to have started."""
         if self._expected_sources.pop(source_entity, None) is not None:
             self._schedule_save()
+
+    def active_moves(self, kind: str) -> list[tuple[str, float]]:
+        """Return active source moves of one kind with remaining seconds."""
+        now = time.monotonic()
+        return [
+            (source, move.expires - now)
+            for source, moves in self._expected_sources.items()
+            for move in moves
+            if move.kind == kind and now < move.expires
+        ]
+
+    def set_source_followup(self, source_entity: str, target: int | None) -> None:
+        """Persist or clear a RYSE endpoint command that must follow its nudge."""
+        if target is None:
+            if self._source_followups.pop(source_entity, None) is not None:
+                self._schedule_save()
+            return
+        self._source_followups[source_entity] = (target, time.time() + EXPECTED_MOVE_SECONDS)
+        self._schedule_save()
+
+    def source_followup(self, source_entity: str) -> int | None:
+        """Return one unexpired RYSE endpoint followup."""
+        followup = self._source_followups.get(source_entity)
+        if followup is None:
+            return None
+        target, expires_at = followup
+        if time.time() < expires_at:
+            return target
+        self._source_followups.pop(source_entity, None)
+        self._schedule_save()
+        return None
 
     def mark_automation_context(self, context: Context) -> None:
         """Mark a service context whose cover commands must not create overrides."""
@@ -229,6 +293,8 @@ class OverrideManager:
             source: [
                 {
                     "target": move.target,
+                    "direction": move.direction,
+                    "kind": move.kind,
                     "expires_at": move.expires_at,
                     "attribution_seconds": move.attribution_seconds,
                 }
@@ -240,4 +306,9 @@ class OverrideManager:
         return {
             "entities": sorted(self._overrides),
             "expected": {source: moves for source, moves in expected.items() if moves},
+            "followups": {
+                source: {"target": target, "expires_at": expires_at}
+                for source, (target, expires_at) in self._source_followups.items()
+                if now_at < expires_at
+            },
         }

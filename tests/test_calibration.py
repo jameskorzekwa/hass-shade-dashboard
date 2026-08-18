@@ -187,6 +187,22 @@ async def test_recalibrate_unlocks_on_gateway_rejection() -> None:
     manager.cancel_source_moves.assert_called_once_with("cover.x")
 
 
+async def test_start_restores_persisted_calibration_lock() -> None:
+    """Restarting HA cannot unlock a calibration still moving the hardware."""
+    t = _tracker()
+    manager = MagicMock()
+    manager.active_moves.return_value = [("cover.x", 200)]
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
+    t._build_map = AsyncMock()
+    t.hass.loop.create_task = MagicMock()
+    t._run = MagicMock(return_value=MagicMock())
+
+    await t.start()
+
+    assert t.is_calibrating("cover.x") is True
+    manager.active_moves.assert_called_once_with("calibration")
+
+
 async def test_cover_blocks_commands_while_calibrating() -> None:
     """Open/close/set/stop are refused (routed nowhere) during calibration."""
     cover = ShadeCover("ko1", "cover.kyle_s_office_shade_1", tracked=True)

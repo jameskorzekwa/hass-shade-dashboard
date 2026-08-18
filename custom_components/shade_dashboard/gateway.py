@@ -160,7 +160,7 @@ class GatewayTracker:
         """Claim the current command generation for each source shade."""
         return {entity: self.supersede_source_move(entity) for entity in entities}
 
-    async def _put_positions(self, ids: list[int], primary: float) -> bool:
+    async def _put_positions(self, ids: list[int], primary: float) -> bool | None:
         """One synced positions call moving every listed gateway shade together."""
         if not ids:
             return False
@@ -172,8 +172,18 @@ class GatewayTracker:
                 resp.raise_for_status()
         except Exception as err:  # noqa: BLE001 - report, don't raise into the caller
             _LOGGER.warning("Positions move (ids=%s) failed: %s", id_list, err)
-            return False
+            # A response status is a definitive rejection. Timeouts and broken
+            # connections are uncertain because this gateway often accepts a
+            # command but fails to return its HTTP response.
+            return False if getattr(err, "status", None) is not None else None
         return True
+
+    def _source_is_movable(self, entity_id: str) -> bool:
+        """Whether a source remains available and outside calibration."""
+        if self.is_calibrating(entity_id):
+            return False
+        state = self.hass.states.get(entity_id)
+        return state is None or state.state != STATE_UNAVAILABLE
 
     def _movable_ids(self, source_entities: list[str]) -> dict[str, int]:
         """entity -> gateway id for members that are on the gateway, available,
@@ -181,15 +191,12 @@ class GatewayTracker:
         out: dict[str, int] = {}
         for e in source_entities:
             gid = self._entity_to_id.get(e)
-            if gid is None or self.is_calibrating(e):
-                continue
-            st = self.hass.states.get(e)
-            if st is not None and st.state == STATE_UNAVAILABLE:
+            if gid is None or not self._source_is_movable(e):
                 continue
             out[e] = gid
         return out
 
-    async def async_move_group(self, source_entities: list[str], primary: float) -> bool:
+    async def async_move_group(self, source_entities: list[str], primary: float) -> bool | None:
         """Fire-and-forget synced move for a group (no verification)."""
         movable = self._movable_ids(source_entities)
         self._claim_source_moves(movable)
@@ -226,7 +233,11 @@ class GatewayTracker:
         pos: dict[int, int] = {}
         while time.monotonic() - start < MOVE_TIMEOUT:
             await asyncio.sleep(2.0)
-            pos = await self._read_positions(ids)
+            try:
+                pos = await self._read_positions(ids)
+            except Exception as err:  # noqa: BLE001 - transient verification read
+                _LOGGER.debug("Position verification read failed: %s", err)
+                continue
             now = time.monotonic()
             for g in ids:
                 v = pos.get(g)
@@ -265,11 +276,12 @@ class GatewayTracker:
             return []
         claims = self._claim_source_moves(pending)
         target = round(max(0.0, min(1.0, primary)) * 100)
+        confirmed_put = False
         for _attempt in range(retries + 1):
             pending = {
                 entity: gateway_id
                 for entity, gateway_id in pending.items()
-                if self._command_generation.get(entity) == claims[entity]
+                if self._command_generation.get(entity) == claims[entity] and self._source_is_movable(entity)
             }
             if not pending:
                 break
@@ -277,28 +289,41 @@ class GatewayTracker:
             if manager is not None:
                 for entity in pending:
                     manager.expect_source_move(entity, target)
-            await self._put_positions(list(pending.values()), primary)
+            put_result = await self._put_positions(list(pending.values()), primary)
+            confirmed_put |= put_result is True
             final = await self._wait_settled(list(pending.values()), target)
             pending = {
                 entity: gateway_id
                 for entity, gateway_id in pending.items()
                 if self._command_generation.get(entity) == claims[entity]
+                and self._source_is_movable(entity)
                 and abs(final.get(gateway_id, -999) - target) > MOVE_TOLERANCE
             }
             if not pending:
                 break
         failed = list(pending)
         if failed:
-            await self._notify_move_failure(failed, target)
+            if not confirmed_put and (manager := self.hass.data.get(OVERRIDE_MANAGER_KEY)):
+                for entity in failed:
+                    manager.cancel_source_moves(entity)
+            await self._notify_move_failure(failed, target, allow_recalibrate=confirmed_put)
         return failed
 
-    async def _notify_move_failure(self, entities: list[str], target: int) -> None:
+    async def _notify_move_failure(
+        self,
+        entities: list[str],
+        target: int,
+        *,
+        allow_recalibrate: bool = True,
+    ) -> None:
         """Notify and safely recalibrate one shade that failed after a retry."""
         self.hass.bus.async_fire(MOVE_FAILED_EVENT, {"entities": entities, "target": target})
         names = ", ".join(self._friendly(e) for e in entities)
         _LOGGER.warning("Shades did not reach %d%% after retry: %s", target, names)
         recovery = ""
-        if len(entities) == 1 and target in (0, 100):
+        if not allow_recalibrate:
+            recovery = " The gateway did not confirm either command, so automatic recalibration was not started."
+        elif len(entities) == 1 and target in (0, 100):
             entity = entities[0]
             now = time.monotonic()
             if not self._auto_recalibrate_enabled():
@@ -358,7 +383,7 @@ class GatewayTracker:
         self.supersede_source_move(entity_id)
         manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
         if manager:
-            manager.expect_source_move(entity_id, seconds=CALIBRATE_LOCK + 15)
+            manager.expect_source_move(entity_id, seconds=CALIBRATE_LOCK + 15, kind="calibration")
         try:
             # bleName contains a ':' — build the URL directly to avoid re-encoding.
             url = f"http://{self._host}/home/shades/exec?shades={ble}"
@@ -367,7 +392,10 @@ class GatewayTracker:
                 data = await resp.json()
         except Exception as err:  # noqa: BLE001 - report, don't raise into the service
             _LOGGER.warning("Recalibrate %s (%s) failed: %s", entity_id, ble, err)
-            self._set_calibrating(entity_id, 0)  # unlock — it never started
+            if getattr(err, "status", None) is not None:
+                self._set_calibrating(entity_id, 0)
+                if manager:
+                    manager.cancel_source_moves(entity_id)
             return False
         ok = isinstance(data, dict) and data.get("err") == 0
         if not ok:
@@ -378,6 +406,10 @@ class GatewayTracker:
         return ok
 
     async def start(self) -> None:
+        if manager := self.hass.data.get(OVERRIDE_MANAGER_KEY):
+            for entity, remaining in manager.active_moves("calibration"):
+                if (lock_remaining := remaining - 15) > 0:
+                    self._set_calibrating(entity, lock_remaining)
         try:
             await self._build_map()
         except Exception:  # noqa: BLE001 - never break setup on a gateway hiccup

@@ -235,6 +235,51 @@ async def test_verified_move_persistent_failure_notifies() -> None:
     t.hass.services.async_call.assert_awaited()  # persistent_notification
 
 
+async def test_unconfirmed_put_failure_never_recalibrates() -> None:
+    """A communication failure is not evidence that healthy shade limits drifted."""
+    t = _verify_tracker()
+    t._entity_to_id = {"cover.a": 1}
+    t._put_positions = AsyncMock(return_value=None)
+    t._wait_settled = AsyncMock(side_effect=[{1: 40}, {1: 40}])
+    t.async_recalibrate = AsyncMock(return_value=True)
+    t.hass.data = {}
+
+    assert await t.async_move_group_verified(["cover.a"], 1.0) == ["cover.a"]
+
+    t.async_recalibrate.assert_not_awaited()
+    message = t.hass.services.async_call.await_args.args[2]["message"]
+    assert "did not confirm either command" in message
+
+
+async def test_member_becoming_unavailable_is_not_retried_or_failed() -> None:
+    """An outage during verification removes that shade from the operation."""
+    t = _verify_tracker()
+    t._entity_to_id = {"cover.a": 1}
+    source_state = MagicMock(state="open")
+    t.hass.states.get.return_value = source_state
+
+    async def become_unavailable(_ids, _target):
+        source_state.state = "unavailable"
+        return {}
+
+    t._wait_settled = AsyncMock(side_effect=become_unavailable)
+
+    assert await t.async_move_group_verified(["cover.a"], 0.0) == []
+    assert t._put_positions.await_count == 1
+    t.hass.services.async_call.assert_not_awaited()
+
+
+async def test_verification_read_recovers_from_transient_error() -> None:
+    """One failed GET does not abort verification after a command was issued."""
+    t = _tracker()
+    t._read_positions = AsyncMock(side_effect=[RuntimeError("temporary"), {1: 100}])
+    with (
+        patch("custom_components.shade_dashboard.gateway.asyncio.sleep", new=AsyncMock()),
+        patch("custom_components.shade_dashboard.gateway.time.monotonic", side_effect=[0, 1, 2, 7]),
+    ):
+        assert await t._wait_settled([1], 100) == {1: 100}
+
+
 async def test_single_verified_failure_starts_recalibration() -> None:
     """One endpoint failure after retry starts a rate-limited recalibration."""
     t = _verify_tracker()
