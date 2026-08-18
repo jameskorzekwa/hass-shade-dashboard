@@ -187,6 +187,7 @@ class ShadeCover(CoverEntity):
             self._resolve_meta()
         self._maybe_settle_optimistic()
         if not self._tracked and self._source_moved_externally(event) and (manager := self._override_manager()):
+            self._endpoint_followup = None
             manager.set_overridden(self.entity_id, True)
         await self._finish_endpoint_reversal(event)
         self.async_write_ha_state()
@@ -225,6 +226,8 @@ class ShadeCover(CoverEntity):
             self._source,
             previous=int(old_pos),
             current=int(new_pos),
+            direction=1 if new.state == STATE_OPENING else -1 if new.state == STATE_CLOSING else None,
+            settled=new.state not in (STATE_OPENING, STATE_CLOSING),
         )
         return not expected
 
@@ -366,6 +369,8 @@ class ShadeCover(CoverEntity):
         if self._blocked_by_calibration():
             return
         self._mark_manual_override()
+        if self._tracked and (tracker := self.hass.data.get(TRACKER_KEY)):
+            tracker.supersede_source_move(self._source)
         if manager := self._override_manager():
             manager.expect_source_move(self._source)
         await self.hass.services.async_call("cover", SERVICE_STOP_COVER, {"entity_id": self._source}, blocking=False)
@@ -396,6 +401,10 @@ class ShadeCover(CoverEntity):
     async def async_clear_override(self) -> None:
         """Return this shade to automatic group moves."""
         if manager := self._override_manager():
+            if self.is_opening or self.is_closing:
+                # Resume means the current manual movement may finish without
+                # immediately recreating the override on its next update.
+                manager.expect_source_move(self._source)
             manager.set_overridden(self.entity_id, False)
 
     def _override_manager(self):
@@ -412,10 +421,12 @@ class ShadeCover(CoverEntity):
         """Route a movement to the real device, holding position until it moves."""
         if self._blocked_by_calibration():
             return
+        self._mark_manual_override()
         if self._endpoint_followup == target:
             return
         self._endpoint_followup = None
-        self._mark_manual_override()
+        if self._tracked and (tracker := self.hass.data.get(TRACKER_KEY)):
+            tracker.supersede_source_move(self._source)
         manager = self._override_manager()
         if manager is not None:
             manager.expect_source_move(self._source, target)

@@ -16,7 +16,7 @@ import os
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
@@ -72,6 +72,18 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
             _LOGGER.warning("Unknown move_group group %r", call.data["group"])
             return
         entities += resolved
+    tracker = hass.data.get(TRACKER_KEY)
+    entities = list(dict.fromkeys(entities))
+    commandable: list[str] = []
+    for entity in entities:
+        state = hass.states.get(entity)
+        if state is None or state.state == STATE_UNAVAILABLE:
+            continue
+        source = source_for_abstract(entity)
+        calibrating = bool(source and tracker is not None and tracker.is_calibrating(source) is True)
+        if not calibrating:
+            commandable.append(entity)
+    entities = commandable
     position = call.data["position"]
     verify = call.data.get("verify", True)
     respect_overrides = call.data.get("respect_overrides", False)
@@ -83,7 +95,6 @@ async def _async_move_group(hass: HomeAssistant, call: ServiceCall) -> None:
         else:
             for entity in entities:
                 overrides.set_overridden(entity, True)
-    tracker = hass.data.get(TRACKER_KEY)
     tracked_sources: list[str] = []
     untracked: list[str] = []
     for entity in entities:
@@ -187,4 +198,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     tracker = hass.data.pop(TRACKER_KEY, None)
     if tracker is not None:
         await tracker.stop()
+    overrides: OverrideManager | None = hass.data.get(OVERRIDE_MANAGER_KEY)
+    if overrides is not None:
+        await overrides.async_flush()
     return unloaded

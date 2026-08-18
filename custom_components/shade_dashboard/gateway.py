@@ -90,7 +90,7 @@ def _shade_position(shade) -> int | None:
     if not isinstance(positions, dict):
         return None
     primary = positions.get("primary")
-    if not isinstance(primary, (int, float)):
+    if isinstance(primary, bool) or not isinstance(primary, (int, float)) or not 0 <= primary <= 1:
         return None
     return round(primary * 100)
 
@@ -110,11 +110,16 @@ class GatewayTracker:
         self._last: dict | None = None
         self._prev_pos: dict[str, int] = {}
         self._last_change: dict[str, float] = {}
+        # Require one confirming healthy reading before an uncommanded change
+        # becomes manual. This rejects a reconnect spike that precedes the core
+        # integration's unavailable state without delaying real motion >2s.
+        self._manual_candidates: dict[str, tuple[int, int]] = {}
         # calibration-drift bookkeeping
         self._reach: dict[str, list[tuple[float, int]]] = {}  # entity -> [(ts, pos)]
         self._last_recal: dict[str, float] = {}
         self._last_cal_check = 0.0
         self._calibrating: dict[str, float] = {}  # entity -> monotonic lock expiry
+        self._command_generation: dict[str, int] = {}
 
     async def _get(self, path: str):
         async with self._session.get(f"http://{self._host}{path}", timeout=8) as resp:
@@ -144,6 +149,16 @@ class GatewayTracker:
     def has_gateway_id(self, entity_id: str) -> bool:
         """Whether a (source) cover entity is on this gateway."""
         return entity_id in self._entity_to_id
+
+    def supersede_source_move(self, entity_id: str) -> int:
+        """Invalidate retries from older commands for one source shade."""
+        generation = self._command_generation.get(entity_id, 0) + 1
+        self._command_generation[entity_id] = generation
+        return generation
+
+    def _claim_source_moves(self, entities) -> dict[str, int]:
+        """Claim the current command generation for each source shade."""
+        return {entity: self.supersede_source_move(entity) for entity in entities}
 
     async def _put_positions(self, ids: list[int], primary: float) -> bool:
         """One synced positions call moving every listed gateway shade together."""
@@ -177,6 +192,7 @@ class GatewayTracker:
     async def async_move_group(self, source_entities: list[str], primary: float) -> bool:
         """Fire-and-forget synced move for a group (no verification)."""
         movable = self._movable_ids(source_entities)
+        self._claim_source_moves(movable)
         manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
         if manager is not None:
             for entity in movable:
@@ -192,8 +208,13 @@ class GatewayTracker:
         for shade in shades:
             gateway_id = shade.get("id")
             value = _shade_position(shade)
-            if gateway_id in idset and value is not None:
-                positions[gateway_id] = value
+            if gateway_id not in idset or value is None:
+                continue
+            source = self._id_to_entity.get(gateway_id)
+            source_state = self.hass.states.get(source) if source else None
+            if source_state is not None and source_state.state == STATE_UNAVAILABLE:
+                continue
+            positions[gateway_id] = value
         return positions
 
     async def _wait_settled(self, ids: list[int], target: int) -> dict[int, int]:
@@ -242,15 +263,28 @@ class GatewayTracker:
         pending = self._movable_ids(source_entities)  # entity -> gid
         if not pending:
             return []
+        claims = self._claim_source_moves(pending)
         target = round(max(0.0, min(1.0, primary)) * 100)
         for _attempt in range(retries + 1):
+            pending = {
+                entity: gateway_id
+                for entity, gateway_id in pending.items()
+                if self._command_generation.get(entity) == claims[entity]
+            }
+            if not pending:
+                break
             manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
             if manager is not None:
                 for entity in pending:
                     manager.expect_source_move(entity, target)
             await self._put_positions(list(pending.values()), primary)
             final = await self._wait_settled(list(pending.values()), target)
-            pending = {e: g for e, g in pending.items() if abs(final.get(g, -999) - target) > MOVE_TOLERANCE}
+            pending = {
+                entity: gateway_id
+                for entity, gateway_id in pending.items()
+                if self._command_generation.get(entity) == claims[entity]
+                and abs(final.get(gateway_id, -999) - target) > MOVE_TOLERANCE
+            }
             if not pending:
                 break
         failed = list(pending)
@@ -321,7 +355,9 @@ class GatewayTracker:
             return False
         # Lock BEFORE sending so a command racing in right after is blocked.
         self._set_calibrating(entity_id, CALIBRATE_LOCK)
-        if manager := self.hass.data.get(OVERRIDE_MANAGER_KEY):
+        self.supersede_source_move(entity_id)
+        manager = self.hass.data.get(OVERRIDE_MANAGER_KEY)
+        if manager:
             manager.expect_source_move(entity_id, seconds=CALIBRATE_LOCK + 15)
         try:
             # bleName contains a ':' — build the URL directly to avoid re-encoding.
@@ -336,6 +372,8 @@ class GatewayTracker:
         ok = isinstance(data, dict) and data.get("err") == 0
         if not ok:
             self._set_calibrating(entity_id, 0)  # unlock — gateway rejected it
+            if manager:
+                manager.cancel_source_moves(entity_id)
         _LOGGER.info("Recalibrate %s (%s): %s", entity_id, ble, "accepted" if ok else data)
         return ok
 
@@ -366,6 +404,7 @@ class GatewayTracker:
                 # The first reading after an outage is a new baseline, not proof
                 # that every position change during the gap was manual.
                 self._prev_pos.clear()
+                self._manual_candidates.clear()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
 
@@ -384,6 +423,7 @@ class GatewayTracker:
                 # During a gateway reconnect the core integration becomes
                 # unavailable while the local API can emit empty/zeroed data.
                 # Omitting it here makes the next healthy reading a baseline.
+                self._manual_candidates.pop(entity, None)
                 continue
             positions[entity] = value
             # velocity/motion are unreliable (usually 0/None even mid-travel), so
@@ -398,16 +438,38 @@ class GatewayTracker:
                     current=value,
                 )
             )
+            confirmed_manual = False
+            if candidate := self._manual_candidates.get(entity):
+                baseline, candidate_value = candidate
+                continuing = (value - candidate_value) * (candidate_value - baseline) >= 0
+                if expected or value == baseline:
+                    self._manual_candidates.pop(entity, None)
+                elif value == candidate_value or continuing:
+                    if manager is not None:
+                        manager.set_source_overridden(entity)
+                    self._manual_candidates.pop(entity, None)
+                    confirmed_manual = True
+                elif prev is not None and prev != value:
+                    self._manual_candidates[entity] = (baseline, value)
             if prev is not None and prev != value:
                 self._last_change[entity] = now
-                if manager is not None and abs(value - prev) > MANUAL_MOVE_EPS and not expected:
-                    manager.set_source_overridden(entity)
+                if (
+                    manager is not None
+                    and abs(value - prev) > MANUAL_MOVE_EPS
+                    and not expected
+                    and not confirmed_manual
+                    and entity not in self._manual_candidates
+                ):
+                    self.supersede_source_move(entity)
+                    self._manual_candidates[entity] = (prev, value)
             if now - self._last_change.get(entity, 0.0) < MOVE_HOLD:
                 moving.append(entity)
             # sparse position history (dedupe unchanged) for drift detection
             hist = self._reach.setdefault(entity, [])
             if not hist or hist[-1][1] != value:
                 hist.append((now, value))
+        for entity in self._manual_candidates.keys() - positions.keys():
+            self._manual_candidates.pop(entity, None)
         self._prev_pos = positions
         payload = {"positions": positions, "moving": sorted(moving)}
         if payload != self._last:

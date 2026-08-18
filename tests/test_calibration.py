@@ -9,6 +9,7 @@ import pytest
 from custom_components.shade_dashboard.const import (
     CALIBRATE_EVENT,
     CALIBRATE_HEX,
+    OVERRIDE_MANAGER_KEY,
     TRACKER_KEY,
 )
 from custom_components.shade_dashboard.cover import ShadeCover
@@ -179,8 +180,11 @@ async def test_recalibrate_unlocks_on_gateway_rejection() -> None:
     t._entity_to_ble = {"cover.x": "DUE:A6C5"}
     _mock_post(t, {"err": 4, "errMsg": "nope"})
     t.hass = MagicMock()
+    manager = MagicMock()
+    t.hass.data = {OVERRIDE_MANAGER_KEY: manager}
     assert await t.async_recalibrate("cover.x") is False
     assert t.is_calibrating("cover.x") is False
+    manager.cancel_source_moves.assert_called_once_with("cover.x")
 
 
 async def test_cover_blocks_commands_while_calibrating() -> None:
