@@ -9,11 +9,24 @@ disable-model-invocation: true
 Side-effecting: touches the live HA host. Confirm with the user before running
 if not already authorized.
 
-Host/SSH access and the HA REST token are NOT in this repo. Read them from agent
-memory / the agent-config repo (`home-assistant/access.md`): SSH is
-`root@homeassistant.local` (key-based); the long-lived token is in the macOS
-Keychain — fetch inline, never echo it:
-`security find-generic-password -a "$USER" -s ha_token -w`.
+Read current `home-assistant/access.md` and `home-assistant/gotchas.md` from
+agent-config before deployment. Commands execute on bee2, a headless Linux
+host, even when the session is displayed on a Mac laptop.
+
+Use `ssh -o BatchMode=yes -o ConnectTimeout=10 ha`. The configured `ha` alias
+targets `root@192.168.1.126`, enforces the pinned key in `~/.ssh/ha_known_hosts`,
+and lands in the SSH add-on container with `/config` mounted. Keep host-key
+checking enabled; do not substitute a raw hostname that loses the pin.
+
+The Core API is `http://192.168.1.126:8123`. Its long-lived token is service
+`ha_token`, account `jkorzekwa`, in bee2's live Secret Service on
+`unix:path=/run/user/1000/bus`. The requesting process must retrieve and use
+the token in memory, or receive it through an approved inherited descriptor.
+Never expose it in shell variables, argv, environment, logs, files, or output.
+The repository does not ship a credential adapter: use the verified host
+consumer from the canonical access procedure, and stop if it is unavailable.
+Verify authentication with `GET /api/` before the authorized mutation. The
+Supervisor token is not a Core API token.
 
 ## Steps
 
@@ -21,20 +34,22 @@ Keychain — fetch inline, never echo it:
    - `cp custom_components/shade_dashboard/shade-dashboard-card.js shade-dashboard-card.js`
    - `node --check custom_components/shade_dashboard/shade-dashboard-card.js`
    - `diff -q` the two copies → must be byte-identical.
-   - `shasum` the local file; note the hash.
+   - `sha256sum` the local file; note the hash.
 
 2. **Deploy both server targets**
-   - `scp` the card to `/config/custom_components/shade_dashboard/shade-dashboard-card.js`
-   - `scp` the card to `/config/www/shade-dashboard-card.js` (fallback resource path)
+   - Use `scp -o BatchMode=yes -o ConnectTimeout=10` with the pinned `ha` alias.
+   - Copy the card to `ha:/config/custom_components/shade_dashboard/shade-dashboard-card.js`.
+   - Copy it to `ha:/config/www/shade-dashboard-card.js` (fallback resource path).
 
 3. **Verify on server**
-   - `sha1sum` both server copies → must equal the local hash and each other.
+   - Through `ssh ha`, run `sha256sum` on both server copies → must equal the
+     local SHA-256 and each other.
    - Abort and report if any hash mismatches.
 
 4. **Activate**
    - Reload the integration via the HA REST API
      (`POST /api/services/homeassistant/reload_config_entry` with the shade_dashboard
-     entry id) using the Keychain token.
+     entry id) through the in-process Core API consumer described above.
    - Note: a config-entry reload does NOT re-stamp the card cache-bust `?v=` query
      (only a full HA restart re-reads the file mtime). Tell the user to hard-refresh
      the browser (Cmd/Ctrl+Shift+R) to pick up the new card.
